@@ -1,0 +1,29 @@
+package analysis
+
+import (
+	"testing"
+
+	"github.com/tszaks/codex-memory/internal/index"
+)
+
+func TestExplain(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	report, err := Explain(store, "main.go")
+	if err != nil {
+		t.Fatalf("Explain failed: %v", err)
+	}
+
+	if len(report.RecentCommits) == 0 {
+		t.Fatalf("expected recent commits in explain report")
+	}
+}

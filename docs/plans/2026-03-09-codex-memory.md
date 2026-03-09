@@ -1,0 +1,368 @@
+# Codex Memory Implementation Plan
+
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Build a local-first Go CLI that indexes git history into a SQLite memory database and answers risk, neighbors, explain, and decisions queries for a repo.
+
+**Architecture:** Follow the small, inspectable CLI style of `codex-sessions`, but add a local SQLite-backed indexing layer. Keep the first version centered on git history and file relationships, then leave clear seams for optional Codex session ingestion later.
+
+**Tech Stack:** Go, SQLite, local git CLI, JSON/table output
+
+---
+
+### Task 1: Scaffold the new CLI repo
+
+**Files:**
+- Create: `go.mod`
+- Create: `main.go`
+- Create: `README.md`
+- Create: `.gitignore`
+- Create: `LICENSE`
+
+**Step 1: Initialize the module**
+
+Create a new Go module named:
+- `github.com/tszaks/codex-memory`
+
+**Step 2: Create a tiny CLI shell**
+
+Add `main.go` with:
+- command parsing
+- help output
+- placeholder subcommands:
+  - `index`
+  - `explain`
+  - `risk`
+  - `neighbors`
+  - `decisions`
+
+**Step 3: Add basic docs**
+
+Write a README that explains:
+- what the tool is
+- why it exists
+- the initial command set
+
+**Step 4: Build the scaffold**
+
+Run: `go test ./...`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add .
+git commit -m "feat: scaffold codex-memory cli"
+```
+
+### Task 2: Add database setup and schema
+
+**Files:**
+- Create: `internal/db/db.go`
+- Create: `internal/db/schema.go`
+- Create: `internal/db/schema_test.go`
+- Modify: `main.go`
+
+**Step 1: Write a failing schema test**
+
+Test that:
+- the database opens
+- the schema initializes
+- expected tables exist
+
+**Step 2: Run the test to confirm failure**
+
+Run: `go test ./...`
+Expected: FAIL
+
+**Step 3: Implement the minimal DB layer**
+
+Add:
+- open/create local SQLite db
+- schema bootstrap
+- a deterministic default db path under the repo
+
+Tables:
+- `repos`
+- `files`
+- `commits`
+- `file_commits`
+- `cochange_edges`
+- `decision_notes`
+
+**Step 4: Run tests**
+
+Run: `go test ./...`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add .
+git commit -m "feat: add codex-memory database schema"
+```
+
+### Task 3: Add git commit ingestion
+
+**Files:**
+- Create: `internal/gitlog/gitlog.go`
+- Create: `internal/gitlog/gitlog_test.go`
+- Modify: `internal/db/db.go`
+
+**Step 1: Write a failing ingestion test**
+
+Test that the git log reader can parse:
+- commit SHA
+- author
+- date
+- subject
+- changed files
+
+Use a fixture or a tiny temp repo.
+
+**Step 2: Run the test**
+
+Run: `go test ./...`
+Expected: FAIL
+
+**Step 3: Implement the parser**
+
+Use the local git CLI to extract:
+- recent commits
+- changed files per commit
+
+Keep it simple and line-oriented.
+
+**Step 4: Run tests**
+
+Run: `go test ./...`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add .
+git commit -m "feat: ingest git history into memory pipeline"
+```
+
+### Task 4: Build the index command
+
+**Files:**
+- Create: `cmd/index.go`
+- Create: `internal/index/indexer.go`
+- Create: `internal/index/indexer_test.go`
+- Modify: `main.go`
+
+**Step 1: Write a failing test**
+
+Test that `index`:
+- scans a repo
+- inserts commits
+- inserts files
+- inserts file-to-commit relationships
+
+**Step 2: Run the test**
+
+Run: `go test ./...`
+Expected: FAIL
+
+**Step 3: Implement the minimal indexer**
+
+The first version should:
+- identify repo root
+- read git history
+- store commits and file touches
+- update basic file stats
+
+**Step 4: Run tests**
+
+Run: `go test ./...`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add .
+git commit -m "feat: add repo indexing command"
+```
+
+### Task 5: Add co-change analysis
+
+**Files:**
+- Create: `internal/analysis/cochange.go`
+- Create: `internal/analysis/cochange_test.go`
+- Modify: `internal/index/indexer.go`
+
+**Step 1: Write a failing test**
+
+Test that files changed in the same commit:
+- produce co-change edges
+- increment counts correctly
+
+**Step 2: Run the test**
+
+Run: `go test ./...`
+Expected: FAIL
+
+**Step 3: Implement co-change scoring**
+
+Store:
+- source path
+- related path
+- count
+- optional recency score
+
+**Step 4: Run tests**
+
+Run: `go test ./...`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add .
+git commit -m "feat: add co-change memory edges"
+```
+
+### Task 6: Add the `neighbors` and `risk` commands
+
+**Files:**
+- Create: `cmd/neighbors.go`
+- Create: `cmd/risk.go`
+- Create: `internal/analysis/risk.go`
+- Create: `internal/analysis/risk_test.go`
+- Modify: `main.go`
+
+**Step 1: Write failing tests**
+
+Test:
+- `neighbors` returns top related files
+- `risk` computes a score from simple heuristics
+
+**Step 2: Run the tests**
+
+Run: `go test ./...`
+Expected: FAIL
+
+**Step 3: Implement the commands**
+
+Risk heuristics:
+- recent touch count
+- total churn
+- co-change breadth
+
+Keep the score simple and explainable.
+
+**Step 4: Run tests**
+
+Run: `go test ./...`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add .
+git commit -m "feat: add risk and neighbors commands"
+```
+
+### Task 7: Add the `explain` and `decisions` commands
+
+**Files:**
+- Create: `cmd/explain.go`
+- Create: `cmd/decisions.go`
+- Create: `internal/analysis/explain.go`
+- Create: `internal/analysis/decisions.go`
+- Create: `internal/analysis/explain_test.go`
+- Modify: `main.go`
+
+**Step 1: Write failing tests**
+
+Test that:
+- `explain <path>` returns recent commits, risk hints, and neighbors
+- `decisions <query>` searches commit rationale text
+
+**Step 2: Run the tests**
+
+Run: `go test ./...`
+Expected: FAIL
+
+**Step 3: Implement the minimal commands**
+
+Keep it simple:
+- explanations come from git history + stats
+- decisions come from commit subject/body search
+
+**Step 4: Run tests**
+
+Run: `go test ./...`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add .
+git commit -m "feat: add explain and decisions commands"
+```
+
+### Task 8: Add JSON output and polish
+
+**Files:**
+- Create: `internal/output/output.go`
+- Create: `internal/output/output_test.go`
+- Modify: `main.go`
+- Modify: `README.md`
+
+**Step 1: Write a failing test**
+
+Test that commands can emit:
+- plain text
+- JSON
+
+**Step 2: Run the test**
+
+Run: `go test ./...`
+Expected: FAIL
+
+**Step 3: Implement output formatting**
+
+Add:
+- `--json`
+- compact text output for humans
+
+**Step 4: Run tests**
+
+Run: `go test ./...`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add .
+git commit -m "feat: add json output and cli polish"
+```
+
+### Task 9: Final verification and packaging
+
+**Files:**
+- Modify: any files required from verification or review
+
+**Step 1: Run full verification**
+
+Run:
+- `go test ./...`
+- `go run .`
+- `go run . index`
+- `go run . explain README.md`
+
+Expected: PASS
+
+**Step 2: Run review**
+
+Run the required review workflow and fix all P0/P1 issues before shipping.
+
+**Step 3: Commit**
+
+```bash
+git add .
+git commit -m "chore: finalize codex-memory v1"
+```
