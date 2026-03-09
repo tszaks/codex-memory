@@ -46,15 +46,17 @@ LIMIT 5
 	defer rows.Close()
 
 	commits := make([]CommitSummary, 0)
+	commitRefs := make([]string, 0, 5)
 	for rows.Next() {
 		var item CommitSummary
 		if err := rows.Scan(&item.SHA, &item.Subject, &item.CommittedAt); err != nil {
 			return ExplainReport{}, fmt.Errorf("scan recent commit: %w", err)
 		}
 		commits = append(commits, item)
+		commitRefs = append(commitRefs, item.SHA)
 	}
 
-	decisions, err := Decisions(store, targetPath, 3)
+	decisions, err := DecisionsByRefs(store, commitRefs, 3)
 	if err != nil {
 		return ExplainReport{}, err
 	}

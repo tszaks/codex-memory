@@ -69,6 +69,8 @@ func OpenPath(repoRoot, dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
 
 	store := &Store{conn: conn, RepoRoot: repoRoot}
 	if err := store.Init(); err != nil {
@@ -80,6 +82,17 @@ func OpenPath(repoRoot, dbPath string) (*Store, error) {
 }
 
 func (s *Store) Init() error {
+	pragmas := []string{
+		"PRAGMA busy_timeout = 5000",
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA synchronous = NORMAL",
+	}
+	for _, statement := range pragmas {
+		if _, err := s.conn.Exec(statement); err != nil {
+			return fmt.Errorf("initialize sqlite pragmas: %w", err)
+		}
+	}
+
 	if _, err := s.conn.Exec(schema); err != nil {
 		return fmt.Errorf("initialize schema: %w", err)
 	}

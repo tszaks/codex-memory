@@ -26,4 +26,8 @@ func TestExplain(t *testing.T) {
 	if len(report.RecentCommits) == 0 {
 		t.Fatalf("expected recent commits in explain report")
 	}
+
+	if len(report.Decisions) == 0 {
+		t.Fatalf("expected decision notes in explain report")
+	}
 }
