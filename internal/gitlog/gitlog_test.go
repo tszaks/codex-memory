@@ -28,6 +28,41 @@ func TestReadHistory(t *testing.T) {
 	}
 }
 
+func TestReadHistoryIgnoresMultilineCommitBodyAsFiles(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "git", "init", "-b", "main")
+	run(t, repo, "git", "config", "user.name", "Test User")
+	run(t, repo, "git", "config", "user.email", "test@example.com")
+
+	writeFile(t, filepath.Join(repo, "main.go"), "package main\n")
+	run(t, repo, "git", "add", ".")
+	run(t, repo, "git", "commit", "-m", "feat: add main")
+
+	writeFile(t, filepath.Join(repo, "main.go"), "package main\n\nfunc main() {}\n")
+	run(t, repo, "git", "add", ".")
+	run(
+		t,
+		repo,
+		"git",
+		"commit",
+		"-m", "fix: add body parsing coverage",
+		"-m", "Explain output should stay clean.\n\nCo-Authored-By: Test User <test@example.com>\nFILES: should never become a path.",
+	)
+
+	commits, err := ReadHistory(repo)
+	if err != nil {
+		t.Fatalf("ReadHistory failed: %v", err)
+	}
+
+	if len(commits) != 2 {
+		t.Fatalf("expected 2 commits, got %d", len(commits))
+	}
+
+	if got, want := commits[0].ChangedFiles, []string{"main.go"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("expected only real changed files, got %#v", got)
+	}
+}
+
 func initTempRepo(t *testing.T) string {
 	t.Helper()
 
