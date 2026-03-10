@@ -13,6 +13,7 @@ import (
 const (
 	commitDelimiter = "\x1e"
 	fieldDelimiter  = "\x1f"
+	filesDelimiter  = "\x1d"
 )
 
 type Commit struct {
@@ -51,9 +52,10 @@ func ReadHistory(repoRoot string) ([]Commit, error) {
 		"-C",
 		repoRoot,
 		"log",
+		"-z",
 		"--date=iso-strict",
 		"--name-only",
-		"--pretty=format:"+commitDelimiter+"%H"+fieldDelimiter+"%an"+fieldDelimiter+"%ae"+fieldDelimiter+"%ad"+fieldDelimiter+"%s"+fieldDelimiter+"%b",
+		"--pretty=format:"+commitDelimiter+"%H"+fieldDelimiter+"%an"+fieldDelimiter+"%ae"+fieldDelimiter+"%ad"+fieldDelimiter+"%s"+fieldDelimiter+"%b"+filesDelimiter,
 	)
 
 	output, err := cmd.Output()
@@ -69,16 +71,14 @@ func ReadHistory(repoRoot string) ([]Commit, error) {
 			continue
 		}
 
-		reader := bufio.NewReader(bytes.NewBufferString(chunk))
-		header, err := reader.ReadString('\n')
-		if err != nil && header == "" {
-			return nil, fmt.Errorf("failed to parse git history header: %w", err)
+		parts := strings.SplitN(chunk, filesDelimiter, 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("missing file delimiter in git history chunk")
 		}
 
-		header = strings.TrimRight(header, "\n")
-		fields := strings.Split(header, fieldDelimiter)
+		fields := strings.SplitN(parts[0], fieldDelimiter, 6)
 		if len(fields) < 6 {
-			return nil, fmt.Errorf("unexpected git history header: %q", header)
+			return nil, fmt.Errorf("unexpected git history header: %q", parts[0])
 		}
 
 		committedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(fields[3]))
@@ -87,9 +87,10 @@ func ReadHistory(repoRoot string) ([]Commit, error) {
 		}
 
 		files := make([]string, 0)
-		scanner := bufio.NewScanner(reader)
+		scanner := bufio.NewScanner(bytes.NewBufferString(parts[1]))
+		scanner.Split(splitNullTerminated)
 		for scanner.Scan() {
-			path := strings.TrimSpace(scanner.Text())
+			path := strings.Trim(scanner.Text(), "\r\n")
 			if path == "" {
 				continue
 			}
@@ -111,4 +112,20 @@ func ReadHistory(repoRoot string) ([]Commit, error) {
 	}
 
 	return commits, nil
+}
+
+func splitNullTerminated(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+
+	if i := bytes.IndexByte(data, 0); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+
+	if atEOF {
+		return len(data), data, nil
+	}
+
+	return 0, nil, nil
 }
