@@ -127,6 +127,32 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	if _, err := s.conn.Exec(`
+UPDATE files
+SET author_count = COALESCE((
+	SELECT COUNT(DISTINCT c.author_email)
+	FROM file_commits fc
+	JOIN commits c
+	  ON c.repo_id = fc.repo_id AND c.sha = fc.commit_sha
+	WHERE fc.repo_id = files.repo_id AND fc.file_path = files.path
+), 0)
+WHERE author_count = 0
+`); err != nil {
+		return fmt.Errorf("backfill files.author_count: %w", err)
+	}
+
+	if _, err := s.conn.Exec(`
+UPDATE files
+SET last_touched_at = COALESCE((
+	SELECT MAX(fc.committed_at)
+	FROM file_commits fc
+	WHERE fc.repo_id = files.repo_id AND fc.file_path = files.path
+), '')
+WHERE last_touched_at = ''
+`); err != nil {
+		return fmt.Errorf("backfill files.last_touched_at: %w", err)
+	}
+
 	return nil
 }
 
