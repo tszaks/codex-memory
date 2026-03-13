@@ -50,4 +50,12 @@ func TestExplain(t *testing.T) {
 	if len(report.StructuralLinks) == 0 {
 		t.Fatalf("expected explain report structural links")
 	}
+
+	if len(report.TestCommands) == 0 {
+		t.Fatalf("expected explain report test commands")
+	}
+
+	if report.Confidence.Level == "" {
+		t.Fatalf("expected explain confidence")
+	}
 }

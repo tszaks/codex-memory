@@ -7,6 +7,7 @@ It gives an LLM fast repo context before, during, and after edits:
 - what files are risky
 - what else is likely to move
 - what tests are most relevant
+- what command to run for the fastest useful verification
 - what the blast radius probably is
 - what changed in the working tree right now
 
@@ -66,10 +67,10 @@ go run . --help
 ## What Each Command Does
 
 - `explain`: best pre-edit briefing for a file
-- `safe`: tells an agent how cautious it should be
-- `plan`: gives a lightweight edit plan
+- `safe`: tells an agent how cautious it should be, with confidence
+- `plan`: gives a lightweight edit plan plus likely test commands
 - `changed-now`: shows the live working tree
-- `review`: reviews branch diff plus working-tree changes
+- `review`: reviews branch diff plus working-tree changes with confidence
 - `handoff`: generates a final summary before handoff
 
 ## Example

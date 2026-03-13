@@ -17,8 +17,10 @@ type ExplainReport struct {
 	Summary         string           `json:"summary"`
 	EditChecklist   []string         `json:"edit_checklist"`
 	SuggestedTests  []string         `json:"suggested_tests"`
+	TestCommands    []string         `json:"test_commands"`
 	BlastRadius     []string         `json:"blast_radius"`
 	StructuralLinks []StructuralLink `json:"structural_links"`
+	Confidence      Confidence       `json:"confidence"`
 	Risk            RiskReport       `json:"risk"`
 	RecentCommits   []CommitSummary  `json:"recent_commits"`
 	Decisions       []Decision       `json:"decisions"`
@@ -77,14 +79,21 @@ LIMIT 5
 	if err != nil {
 		return ExplainReport{}, err
 	}
+	testCommands, err := SuggestedTestCommands(store, risk.Path, 5)
+	if err != nil {
+		return ExplainReport{}, err
+	}
+	confidence := buildConfidence(true, len(structuralLinks), len(suggestedTests), len(blastRadius))
 
 	return ExplainReport{
 		Path:            risk.Path,
 		Summary:         explainSummary(risk, commits, decisions),
 		EditChecklist:   editChecklist(risk, commits),
 		SuggestedTests:  suggestedTests,
+		TestCommands:    testCommands,
 		BlastRadius:     blastRadius,
 		StructuralLinks: structuralLinks,
+		Confidence:      confidence,
 		Risk:            risk,
 		RecentCommits:   commits,
 		Decisions:       decisions,

@@ -2,7 +2,9 @@ package analysis
 
 import (
 	"io/fs"
+	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -15,6 +17,8 @@ type StructuralLink struct {
 	Reason string `json:"reason"`
 }
 
+var goSymbolRegex = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+
 func StructuralLinks(store *db.Store, targetPath string, limit int) ([]StructuralLink, error) {
 	normalized, err := normalizeRepoPath(store.RepoRoot, targetPath)
 	if err != nil {
@@ -25,6 +29,8 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 	if err != nil {
 		return nil, err
 	}
+	targetAbs := filepath.Join(store.RepoRoot, filepath.FromSlash(normalized))
+	targetContent, _ := osReadFile(targetAbs)
 
 	out := make([]StructuralLink, 0)
 	targetDir := filepath.ToSlash(filepath.Dir(normalized))
@@ -41,6 +47,8 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 		candidateDir := filepath.ToSlash(filepath.Dir(candidate))
 		candidateStem := fileStem(candidateName)
 		candidateIsTest := isTestFile(candidateName)
+		candidateAbs := filepath.Join(store.RepoRoot, filepath.FromSlash(candidate))
+		candidateContent, _ := osReadFile(candidateAbs)
 
 		switch {
 		case targetStem != "" && candidateStem == targetStem && targetIsTest != candidateIsTest:
@@ -54,6 +62,18 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 				Path:   candidate,
 				Kind:   "same-stem",
 				Reason: "Shares the same file stem as the target file.",
+			})
+		case strings.HasSuffix(targetName, ".go") && strings.HasSuffix(candidateName, ".go") && referencesGoFile(targetContent, candidateStem):
+			out = append(out, StructuralLink{
+				Path:   candidate,
+				Kind:   "go-symbol",
+				Reason: "Target file references a symbol that matches this Go file's stem.",
+			})
+		case strings.HasSuffix(candidateName, ".go") && strings.HasSuffix(targetName, ".go") && referencesGoFile(candidateContent, targetStem):
+			out = append(out, StructuralLink{
+				Path:   candidate,
+				Kind:   "go-dependent",
+				Reason: "This Go file appears to reference the target file's symbol stem.",
 			})
 		case candidateDir == targetDir && candidateIsTest:
 			out = append(out, StructuralLink{
@@ -73,6 +93,25 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 	return uniqueStructuralLinks(out, limit), nil
 }
 
+func SuggestedTestCommands(store *db.Store, targetPath string, limit int) ([]string, error) {
+	normalized, err := normalizeRepoPath(store.RepoRoot, targetPath)
+	if err != nil {
+		return nil, err
+	}
+
+	tests, err := SuggestedTests(store, normalized, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	commands := make([]string, 0, 2)
+	if strings.HasSuffix(normalized, ".go") || hasGoTests(tests) {
+		commands = append(commands, "go test ./...")
+	}
+
+	return uniqueStrings(commands, limit), nil
+}
+
 func SuggestedTests(store *db.Store, targetPath string, limit int) ([]string, error) {
 	links, err := StructuralLinks(store, targetPath, limit*3)
 	if err != nil {
@@ -81,6 +120,9 @@ func SuggestedTests(store *db.Store, targetPath string, limit int) ([]string, er
 
 	tests := make([]string, 0, limit)
 	for _, link := range links {
+		if link.Kind != "test-pair" && link.Kind != "same-dir-test" {
+			continue
+		}
 		if !isTestFile(filepath.Base(link.Path)) {
 			continue
 		}
@@ -210,4 +252,29 @@ func uniqueStrings(values []string, limit int) []string {
 		}
 	}
 	return out
+}
+
+func referencesGoFile(content []byte, stem string) bool {
+	if len(content) == 0 || stem == "" {
+		return false
+	}
+	for _, match := range goSymbolRegex.FindAllStringSubmatch(string(content), -1) {
+		if len(match) > 1 && strings.EqualFold(match[1], stem) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGoTests(paths []string) bool {
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			return true
+		}
+	}
+	return false
+}
+
+func osReadFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }

@@ -33,6 +33,12 @@ func TestSafe(t *testing.T) {
 	if len(report.SuggestedTests) == 0 {
 		t.Fatalf("expected suggested tests")
 	}
+	if len(report.TestCommands) == 0 {
+		t.Fatalf("expected safe test commands")
+	}
+	if report.Confidence.Level == "" {
+		t.Fatalf("expected safe confidence")
+	}
 }
 
 func TestPlan(t *testing.T) {
@@ -58,6 +64,9 @@ func TestPlan(t *testing.T) {
 	if len(report.FilesToInspect) == 0 {
 		t.Fatalf("expected files to inspect")
 	}
+	if len(report.TestCommands) == 0 {
+		t.Fatalf("expected plan test commands")
+	}
 }
 
 func TestReview(t *testing.T) {
@@ -82,6 +91,9 @@ func TestReview(t *testing.T) {
 	}
 	if len(report.RequiredTests) == 0 {
 		t.Fatalf("expected review to suggest focused tests")
+	}
+	if len(report.TestCommands) == 0 {
+		t.Fatalf("expected review test commands")
 	}
 }
 

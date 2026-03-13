@@ -25,6 +25,7 @@ func runHandoff(out io.Writer, args []string, jsonOutput bool) error {
 	return output.Write(out, report, jsonOutput, func() string {
 		lines := []string{
 			fmt.Sprintf("Summary: %s", report.Summary),
+			fmt.Sprintf("Review confidence: %s (%d)", report.Review.Confidence.Level, report.Review.Confidence.Score),
 			fmt.Sprintf("Review: %s", report.Review.Summary),
 			fmt.Sprintf("Changed now: %s", report.ChangedNow.Summary),
 		}

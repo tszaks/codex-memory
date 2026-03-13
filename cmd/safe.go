@@ -30,6 +30,7 @@ func runSafe(out io.Writer, args []string, jsonOutput bool) error {
 		lines := []string{
 			fmt.Sprintf("Path: %s", report.Path),
 			fmt.Sprintf("Verdict: %s", report.Verdict),
+			fmt.Sprintf("Confidence: %s (%d)", report.Confidence.Level, report.Confidence.Score),
 			fmt.Sprintf("Summary: %s", report.Summary),
 			"",
 			"Required checks:",
@@ -41,6 +42,12 @@ func runSafe(out io.Writer, args []string, jsonOutput bool) error {
 			lines = append(lines, "", "Suggested tests:")
 			for _, test := range report.SuggestedTests {
 				lines = append(lines, "- "+test)
+			}
+		}
+		if len(report.TestCommands) > 0 {
+			lines = append(lines, "", "Suggested test commands:")
+			for _, command := range report.TestCommands {
+				lines = append(lines, "- "+command)
 			}
 		}
 		if len(report.BlastRadius) > 0 {

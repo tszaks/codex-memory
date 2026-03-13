@@ -14,7 +14,9 @@ type SafeReport struct {
 	Summary        string     `json:"summary"`
 	RequiredChecks []string   `json:"required_checks"`
 	SuggestedTests []string   `json:"suggested_tests"`
+	TestCommands   []string   `json:"test_commands"`
 	BlastRadius    []string   `json:"blast_radius"`
+	Confidence     Confidence `json:"confidence"`
 	Risk           RiskReport `json:"risk"`
 }
 
@@ -24,6 +26,8 @@ type PlanReport struct {
 	Steps          []string   `json:"steps"`
 	FilesToInspect []string   `json:"files_to_inspect"`
 	TestsToRun     []string   `json:"tests_to_run"`
+	TestCommands   []string   `json:"test_commands"`
+	Confidence     Confidence `json:"confidence"`
 	Risk           RiskReport `json:"risk"`
 }
 
@@ -42,6 +46,8 @@ type ReviewReport struct {
 	Summary       string         `json:"summary"`
 	ChangedFiles  []ReviewedFile `json:"changed_files"`
 	RequiredTests []string       `json:"required_tests"`
+	TestCommands  []string       `json:"test_commands"`
+	Confidence    Confidence     `json:"confidence"`
 	Notes         []string       `json:"notes"`
 }
 
@@ -78,6 +84,14 @@ func Safe(store *db.Store, targetPath string) (SafeReport, error) {
 	if err != nil {
 		return SafeReport{}, err
 	}
+	testCommands, err := SuggestedTestCommands(store, targetPath, 5)
+	if err != nil {
+		return SafeReport{}, err
+	}
+	structuralLinks, err := StructuralLinks(store, targetPath, 6)
+	if err != nil {
+		return SafeReport{}, err
+	}
 
 	verdict := "safe_with_normal_review"
 	summary := "Looks reasonably safe for an agent to edit with a normal review pass."
@@ -106,7 +120,9 @@ func Safe(store *db.Store, targetPath string) (SafeReport, error) {
 		Summary:        summary,
 		RequiredChecks: checks,
 		SuggestedTests: tests,
+		TestCommands:   testCommands,
 		BlastRadius:    blastRadius,
+		Confidence:     buildConfidence(true, len(structuralLinks), len(tests), len(blastRadius)),
 		Risk:           risk,
 	}, nil
 }
@@ -132,6 +148,8 @@ func Plan(store *db.Store, targetPath string) (PlanReport, error) {
 		Steps:          steps,
 		FilesToInspect: filesToInspect,
 		TestsToRun:     safe.SuggestedTests,
+		TestCommands:   safe.TestCommands,
+		Confidence:     safe.Confidence,
 		Risk:           safe.Risk,
 	}, nil
 }
@@ -168,6 +186,7 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 
 	reviewed := make([]ReviewedFile, 0, len(changed))
 	requiredTests := make([]string, 0)
+	testCommands := make([]string, 0)
 	notes := make([]string, 0)
 	highRiskCount := 0
 
@@ -189,6 +208,10 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		if err != nil {
 			return ReviewReport{}, err
 		}
+		commands, err := SuggestedTestCommands(store, path, 3)
+		if err != nil {
+			return ReviewReport{}, err
+		}
 		blastRadius, err := BlastRadius(store, path, 4)
 		if err != nil {
 			return ReviewReport{}, err
@@ -199,6 +222,7 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		}
 
 		requiredTests = append(requiredTests, tests...)
+		testCommands = append(testCommands, commands...)
 		reviewed = append(reviewed, ReviewedFile{
 			Path:           path,
 			ChangeSource:   changeSources[path],
@@ -220,6 +244,8 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		Summary:       summary,
 		ChangedFiles:  reviewed,
 		RequiredTests: uniqueStrings(requiredTests, 10),
+		TestCommands:  uniqueStrings(testCommands, 5),
+		Confidence:    buildConfidence(len(reviewed) > 0, 1, len(requiredTests), len(reviewed)),
 		Notes:         uniqueStrings(notes, 10),
 	}, nil
 }

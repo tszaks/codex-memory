@@ -30,6 +30,7 @@ func runExplain(out io.Writer, args []string, jsonOutput bool) error {
 		lines := []string{
 			fmt.Sprintf("Path: %s", report.Path),
 			fmt.Sprintf("Risk: %s (%d)", report.Risk.Level, report.Risk.Score),
+			fmt.Sprintf("Confidence: %s (%d)", report.Confidence.Level, report.Confidence.Score),
 			fmt.Sprintf("Summary: %s", report.Summary),
 			"",
 			"Before you edit:",
@@ -54,10 +55,22 @@ func runExplain(out io.Writer, args []string, jsonOutput bool) error {
 				lines = append(lines, "- "+test)
 			}
 		}
+		if len(report.TestCommands) > 0 {
+			lines = append(lines, "", "Suggested test commands:")
+			for _, command := range report.TestCommands {
+				lines = append(lines, "- "+command)
+			}
+		}
 		if len(report.BlastRadius) > 0 {
 			lines = append(lines, "", "Blast radius:")
 			for _, path := range report.BlastRadius {
 				lines = append(lines, "- "+path)
+			}
+		}
+		if len(report.StructuralLinks) > 0 {
+			lines = append(lines, "", "Structural links:")
+			for _, link := range report.StructuralLinks {
+				lines = append(lines, fmt.Sprintf("- %s (%s)", link.Path, link.Kind))
 			}
 		}
 		lines = append(lines, "", renderNeighbors(report.Neighbors))

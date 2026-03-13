@@ -30,6 +30,7 @@ func runPlan(out io.Writer, args []string, jsonOutput bool) error {
 		lines := []string{
 			fmt.Sprintf("Path: %s", report.Path),
 			fmt.Sprintf("Goal: %s", report.Goal),
+			fmt.Sprintf("Confidence: %s (%d)", report.Confidence.Level, report.Confidence.Score),
 			"",
 			"Files to inspect:",
 		}
@@ -44,6 +45,12 @@ func runPlan(out io.Writer, args []string, jsonOutput bool) error {
 			lines = append(lines, "", "Tests to run:")
 			for _, test := range report.TestsToRun {
 				lines = append(lines, "- "+test)
+			}
+		}
+		if len(report.TestCommands) > 0 {
+			lines = append(lines, "", "Test commands:")
+			for _, command := range report.TestCommands {
+				lines = append(lines, "- "+command)
 			}
 		}
 		return strings.Join(lines, "\n")
