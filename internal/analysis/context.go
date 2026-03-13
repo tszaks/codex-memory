@@ -590,6 +590,7 @@ func inferJSTieredFullCheck(repoRoot, packageManager string) []string {
 			commands = append(commands, scriptCommand(packageManager, script))
 		}
 	}
+	commands = append(commands, inferMakeTargets(repoRoot, "test", "lint", "typecheck", "check", "build")...)
 	return commands
 }
 
@@ -737,33 +738,63 @@ func targetedTestScriptCommand(packageManager, script, testPath string) string {
 
 func inferPythonSafeChecks(repoRoot string) []string {
 	commands := []string{"pytest"}
-	if fileExists(filepath.Join(repoRoot, "pyproject.toml")) {
-		content, err := os.ReadFile(filepath.Join(repoRoot, "pyproject.toml"))
-		if err == nil {
-			text := string(content)
-			if strings.Contains(text, "[tool.ruff") {
-				commands = append(commands, "ruff check .")
-			}
+	if text := readPythonProjectText(repoRoot); text != "" {
+		if strings.Contains(text, "[tool.ruff") {
+			commands = append(commands, "ruff check .")
+		}
+		if strings.Contains(text, "[testenv") || strings.Contains(text, "[tox]") {
+			commands = append(commands, "tox")
 		}
 	}
+	commands = append(commands, inferMakeTargets(repoRoot, "test", "lint")...)
 	return uniqueStrings(commands, 0)
 }
 
 func inferPythonFullChecks(repoRoot string) []string {
 	commands := inferPythonSafeChecks(repoRoot)
-	if fileExists(filepath.Join(repoRoot, "pyproject.toml")) {
-		content, err := os.ReadFile(filepath.Join(repoRoot, "pyproject.toml"))
-		if err == nil {
-			text := string(content)
-			if strings.Contains(text, "[tool.mypy") {
-				commands = append(commands, "mypy .")
-			}
-			if strings.Contains(text, "[tool.pyright") || fileExists(filepath.Join(repoRoot, "pyrightconfig.json")) {
-				commands = append(commands, "pyright")
-			}
+	if text := readPythonProjectText(repoRoot); text != "" {
+		if strings.Contains(text, "[tool.mypy") {
+			commands = append(commands, "mypy .")
+		}
+		if strings.Contains(text, "[tool.pyright") || fileExists(filepath.Join(repoRoot, "pyrightconfig.json")) {
+			commands = append(commands, "pyright")
+		}
+	}
+	commands = append(commands, inferMakeTargets(repoRoot, "check", "build")...)
+	return uniqueStrings(commands, 0)
+}
+
+func inferMakeTargets(repoRoot string, targets ...string) []string {
+	content, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
+	if err != nil {
+		return nil
+	}
+	text := string(content)
+	commands := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if strings.Contains(text, target+":") {
+			commands = append(commands, "make "+target)
 		}
 	}
 	return uniqueStrings(commands, 0)
+}
+
+func readPythonProjectText(repoRoot string) string {
+	var out strings.Builder
+	for _, name := range []string{"pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg"} {
+		content, err := os.ReadFile(filepath.Join(repoRoot, name))
+		if err != nil {
+			continue
+		}
+		if out.Len() > 0 {
+			out.WriteString("\n")
+		}
+		out.Write(content)
+	}
+	if fileExists(filepath.Join(repoRoot, "noxfile.py")) {
+		out.WriteString("\n[nox]\n")
+	}
+	return out.String()
 }
 
 func resolvePyImportCandidates(sourceDir, spec string) []string {

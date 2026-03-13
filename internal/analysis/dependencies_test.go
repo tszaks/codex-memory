@@ -289,3 +289,79 @@ func TestSuggestedVerificationPlanUsesRepoScriptsForJSTS(t *testing.T) {
 		t.Fatalf("expected full JS verification to include typecheck, got %#v", plan)
 	}
 }
+
+func TestSuggestedVerificationPlanUsesMakeTargetsForJSTS(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if err := os.WriteFile(filepath.Join(repo, "Makefile"), []byte("test:\n\t@echo test\nlint:\n\t@echo lint\nbuild:\n\t@echo build\n"), 0o644); err != nil {
+		t.Fatalf("write Makefile failed: %v", err)
+	}
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	plan, err := SuggestedVerificationPlan(store, "web/app.ts")
+	if err != nil {
+		t.Fatalf("SuggestedVerificationPlan failed: %v", err)
+	}
+
+	for _, expected := range []string{"make test", "make lint", "make build"} {
+		found := false
+		for _, command := range plan.Full {
+			if command == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected JS full verification to include %q, got %#v", expected, plan)
+		}
+	}
+}
+
+func TestSuggestedVerificationPlanUsesPythonRepoConfigs(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if err := os.WriteFile(filepath.Join(repo, "tox.ini"), []byte("[tox]\nenvlist = py\n"), 0o644); err != nil {
+		t.Fatalf("write tox.ini failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "pytest.ini"), []byte("[pytest]\naddopts = -q\n"), 0o644); err != nil {
+		t.Fatalf("write pytest.ini failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "Makefile"), []byte("test:\n\t@pytest\ncheck:\n\t@echo check\n"), 0o644); err != nil {
+		t.Fatalf("write Makefile failed: %v", err)
+	}
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	plan, err := SuggestedVerificationPlan(store, "pkg/app.py")
+	if err != nil {
+		t.Fatalf("SuggestedVerificationPlan failed: %v", err)
+	}
+
+	for _, expected := range []string{"tox", "make test", "make check"} {
+		found := false
+		for _, command := range plan.Full {
+			if command == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected python verification to include %q, got %#v", expected, plan)
+		}
+	}
+}
