@@ -43,7 +43,6 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 	targetAbs := filepath.Join(store.RepoRoot, filepath.FromSlash(normalized))
 	targetContent, _ := osReadFile(targetAbs)
 	goModulePath := readGoModulePath(store.RepoRoot)
-	tsAliases := readTSConfigAliases(store.RepoRoot)
 
 	out := make([]StructuralLink, 0)
 	targetDir := filepath.ToSlash(filepath.Dir(normalized))
@@ -100,25 +99,25 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 				Kind:   "go-package-dependent",
 				Reason: "This Go file imports the target package from the same repo.",
 			})
-		case referencesJSImport(store.RepoRoot, normalized, targetContent, candidate, tsAliases):
+		case referencesJSImport(store.RepoRoot, normalized, targetContent, candidate):
 			out = append(out, StructuralLink{
 				Path:   candidate,
 				Kind:   "js-import",
 				Reason: "Target file imports this JS/TS module with a relative path.",
 			})
-		case referencesJSImport(store.RepoRoot, candidate, candidateContent, normalized, tsAliases):
+		case referencesJSImport(store.RepoRoot, candidate, candidateContent, normalized):
 			out = append(out, StructuralLink{
 				Path:   candidate,
 				Kind:   "js-dependent",
 				Reason: "This JS/TS file imports the target module with a relative path.",
 			})
-		case referencesPyImport(normalized, targetContent, candidate):
+		case referencesPyImport(store.RepoRoot, normalized, targetContent, candidate):
 			out = append(out, StructuralLink{
 				Path:   candidate,
 				Kind:   "py-import",
 				Reason: "Target file imports this Python module with a local import path.",
 			})
-		case referencesPyImport(candidate, candidateContent, normalized):
+		case referencesPyImport(store.RepoRoot, candidate, candidateContent, normalized):
 			out = append(out, StructuralLink{
 				Path:   candidate,
 				Kind:   "py-dependent",
@@ -348,12 +347,13 @@ func referencesGoImport(sourcePath string, content []byte, candidatePath, module
 	return false
 }
 
-func referencesJSImport(repoRoot, sourcePath string, content []byte, candidatePath string, aliases tsConfigAliases) bool {
+func referencesJSImport(repoRoot, sourcePath string, content []byte, candidatePath string) bool {
 	if len(content) == 0 || !isJSImportFile(sourcePath) || !isJSImportFile(candidatePath) {
 		return false
 	}
 
 	sourceDir := filepath.ToSlash(filepath.Dir(sourcePath))
+	aliases := readTSConfigAliases(repoRoot, sourcePath)
 	for _, match := range jsImportRegex.FindAllStringSubmatch(string(content), -1) {
 		spec := ""
 		if len(match) > 1 && match[1] != "" {
@@ -370,7 +370,7 @@ func referencesJSImport(repoRoot, sourcePath string, content []byte, candidatePa
 	return false
 }
 
-func referencesPyImport(sourcePath string, content []byte, candidatePath string) bool {
+func referencesPyImport(repoRoot, sourcePath string, content []byte, candidatePath string) bool {
 	if len(content) == 0 || !isPythonFile(sourcePath) || !isPythonFile(candidatePath) {
 		return false
 	}
@@ -385,7 +385,7 @@ func referencesPyImport(sourcePath string, content []byte, candidatePath string)
 		if spec == "" {
 			continue
 		}
-		for _, resolved := range resolvePyImportCandidates(sourceDir, spec) {
+		for _, resolved := range resolvePyImportCandidates(repoRoot, sourceDir, spec) {
 			if resolved == candidatePath {
 				return true
 			}
@@ -640,32 +640,112 @@ func packageScripts(repoRoot string) map[string]string {
 	return parsed.Scripts
 }
 
-func readTSConfigAliases(repoRoot string) tsConfigAliases {
+func readTSConfigAliases(repoRoot, sourcePath string) tsConfigAliases {
+	configPath := findNearestTSConfig(repoRoot, filepath.Dir(sourcePath))
+	if configPath == "" {
+		return tsConfigAliases{}
+	}
+	return readTSConfigFile(repoRoot, configPath, map[string]struct{}{})
+}
+
+func findNearestTSConfig(repoRoot, startDir string) string {
+	dir := filepath.ToSlash(filepath.Clean(startDir))
+	for {
+		for _, name := range []string{"tsconfig.json", "jsconfig.json"} {
+			candidate := filepath.Join(repoRoot, filepath.FromSlash(dir), name)
+			if fileExists(candidate) {
+				rel, err := filepath.Rel(repoRoot, candidate)
+				if err == nil {
+					return filepath.ToSlash(rel)
+				}
+			}
+		}
+		if dir == "." || dir == "" || dir == "/" {
+			break
+		}
+		next := filepath.ToSlash(filepath.Dir(dir))
+		if next == dir {
+			break
+		}
+		dir = next
+	}
 	for _, name := range []string{"tsconfig.json", "jsconfig.json"} {
-		content, err := os.ReadFile(filepath.Join(repoRoot, name))
-		if err != nil {
-			continue
-		}
-		cleaned := jsonCommentRegex.ReplaceAllString(string(content), "")
-		var parsed struct {
-			CompilerOptions struct {
-				BaseURL string              `json:"baseUrl"`
-				Paths   map[string][]string `json:"paths"`
-			} `json:"compilerOptions"`
-		}
-		if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-			continue
-		}
-		baseURL := ""
-		if strings.TrimSpace(parsed.CompilerOptions.BaseURL) != "" {
-			baseURL = filepath.ToSlash(filepath.Clean(parsed.CompilerOptions.BaseURL))
-		}
-		return tsConfigAliases{
-			BaseURL: baseURL,
-			Paths:   parsed.CompilerOptions.Paths,
+		if fileExists(filepath.Join(repoRoot, name)) {
+			return name
 		}
 	}
-	return tsConfigAliases{}
+	return ""
+}
+
+func readTSConfigFile(repoRoot, configPath string, visited map[string]struct{}) tsConfigAliases {
+	configPath = filepath.ToSlash(filepath.Clean(configPath))
+	if _, ok := visited[configPath]; ok {
+		return tsConfigAliases{}
+	}
+	visited[configPath] = struct{}{}
+
+	content, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(configPath)))
+	if err != nil {
+		return tsConfigAliases{}
+	}
+	cleaned := jsonCommentRegex.ReplaceAllString(string(content), "")
+	var parsed struct {
+		Extends         string `json:"extends"`
+		CompilerOptions struct {
+			BaseURL string              `json:"baseUrl"`
+			Paths   map[string][]string `json:"paths"`
+		} `json:"compilerOptions"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		return tsConfigAliases{}
+	}
+
+	merged := tsConfigAliases{}
+	if strings.TrimSpace(parsed.Extends) != "" {
+		parentPath := resolveTSConfigExtendsPath(repoRoot, filepath.Dir(configPath), parsed.Extends)
+		if parentPath != "" {
+			merged = readTSConfigFile(repoRoot, parentPath, visited)
+		}
+	}
+
+	configDir := filepath.ToSlash(filepath.Dir(configPath))
+	if configDir == "." {
+		configDir = ""
+	}
+	if strings.TrimSpace(parsed.CompilerOptions.BaseURL) != "" {
+		merged.BaseURL = repoJoinSlash(configDir, parsed.CompilerOptions.BaseURL)
+	}
+	if len(parsed.CompilerOptions.Paths) > 0 {
+		if merged.Paths == nil {
+			merged.Paths = map[string][]string{}
+		}
+		for pattern, targets := range parsed.CompilerOptions.Paths {
+			resolvedTargets := make([]string, 0, len(targets))
+			for _, target := range targets {
+				resolvedTargets = append(resolvedTargets, repoJoinSlash(configDir, target))
+			}
+			merged.Paths[pattern] = resolvedTargets
+		}
+	}
+	return merged
+}
+
+func resolveTSConfigExtendsPath(repoRoot, configDir, extends string) string {
+	value := strings.TrimSpace(extends)
+	if value == "" {
+		return ""
+	}
+	if !strings.HasSuffix(value, ".json") {
+		value += ".json"
+	}
+	if strings.HasPrefix(value, ".") {
+		return filepath.ToSlash(filepath.Clean(filepath.Join(configDir, value)))
+	}
+	candidate := filepath.ToSlash(filepath.Clean(value))
+	if fileExists(filepath.Join(repoRoot, filepath.FromSlash(candidate))) {
+		return candidate
+	}
+	return ""
 }
 
 func resolveTSAliasBases(spec string, aliases tsConfigAliases) []string {
@@ -680,11 +760,7 @@ func resolveTSAliasBases(spec string, aliases tsConfigAliases) []string {
 		}
 		for _, target := range targets {
 			resolved := strings.Replace(target, "*", remainder, 1)
-			if aliases.BaseURL != "" {
-				resolved = filepath.ToSlash(filepath.Clean(filepath.Join(aliases.BaseURL, resolved)))
-			} else {
-				resolved = filepath.ToSlash(filepath.Clean(resolved))
-			}
+			resolved = repoJoinSlash("", resolved)
 			out = append(out, resolved)
 		}
 	}
@@ -797,7 +873,7 @@ func readPythonProjectText(repoRoot string) string {
 	return out.String()
 }
 
-func resolvePyImportCandidates(sourceDir, spec string) []string {
+func resolvePyImportCandidates(repoRoot, sourceDir, spec string) []string {
 	spec = strings.TrimSpace(spec)
 	candidates := make([]string, 0, 8)
 	if strings.HasPrefix(spec, ".") {
@@ -820,8 +896,44 @@ func resolvePyImportCandidates(sourceDir, spec string) []string {
 	}
 
 	dotted := strings.ReplaceAll(spec, ".", "/")
-	candidates = append(candidates, dotted+".py", filepath.ToSlash(filepath.Join(dotted, "__init__.py")))
+	for _, root := range pythonImportRoots(repoRoot, sourceDir) {
+		base := repoJoinSlash(root, dotted)
+		candidates = append(candidates, base+".py", filepath.ToSlash(filepath.Join(base, "__init__.py")))
+	}
 	return uniqueStrings(candidates, 0)
+}
+
+func pythonImportRoots(repoRoot, sourceDir string) []string {
+	roots := []string{""}
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(sourceDir)), "/")
+	prefix := ""
+	for i, part := range parts {
+		if part == "." || part == "" {
+			continue
+		}
+		if prefix == "" {
+			prefix = part
+		} else {
+			prefix = filepath.ToSlash(filepath.Join(prefix, part))
+		}
+		if part == "src" {
+			roots = append(roots, prefix)
+		}
+		if i == 0 && part == "src" {
+			roots = append(roots, "src")
+		}
+	}
+	if dirExists(filepath.Join(repoRoot, "src")) {
+		roots = append(roots, "src")
+	}
+	return uniqueStrings(roots, 0)
+}
+
+func repoJoinSlash(base, value string) string {
+	if strings.TrimSpace(base) == "" {
+		return filepath.ToSlash(filepath.Clean(value))
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.Join(base, value)))
 }
 
 func readGoModulePath(repoRoot string) string {
@@ -841,4 +953,9 @@ func readGoModulePath(repoRoot string) string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

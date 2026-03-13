@@ -142,6 +142,38 @@ func TestStructuralLinksIncludeTSAliasImports(t *testing.T) {
 	}
 }
 
+func TestStructuralLinksIncludeNestedTSAliasImports(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	links, err := StructuralLinks(store, "packages/app/src/feature.ts", 20)
+	if err != nil {
+		t.Fatalf("StructuralLinks failed: %v", err)
+	}
+
+	foundAppAlias := false
+	foundSharedAlias := false
+	for _, link := range links {
+		if link.Path == "packages/app/src/util.ts" && link.Kind == "js-import" {
+			foundAppAlias = true
+		}
+		if link.Path == "web/session.ts" && link.Kind == "js-import" {
+			foundSharedAlias = true
+		}
+	}
+	if !foundAppAlias || !foundSharedAlias {
+		t.Fatalf("expected nested tsconfig aliases to resolve, got %#v", links)
+	}
+}
+
 func TestStructuralLinksIncludePythonImports(t *testing.T) {
 	repo := indexRepo(t)
 	store, err := index.OpenStore(repo)
@@ -167,6 +199,34 @@ func TestStructuralLinksIncludePythonImports(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected python import link to pkg/helper.py, got %#v", links)
+	}
+}
+
+func TestStructuralLinksIncludePythonSrcLayoutImports(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	links, err := StructuralLinks(store, "src/pkgsrc/app.py", 10)
+	if err != nil {
+		t.Fatalf("StructuralLinks failed: %v", err)
+	}
+
+	found := false
+	for _, link := range links {
+		if link.Path == "src/pkgsrc/helper.py" && link.Kind == "py-import" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected python src-layout import link to src/pkgsrc/helper.py, got %#v", links)
 	}
 }
 
