@@ -29,3 +29,19 @@ func TestChangedFilesBetween(t *testing.T) {
 		t.Fatalf("expected 2 changed files, got %#v", files)
 	}
 }
+
+func TestWorkingTreeChanges(t *testing.T) {
+	repo := initTempRepo(t)
+
+	writeFile(t, filepath.Join(repo, "main.go"), "package main\n\nfunc main() {}\n")
+	writeFile(t, filepath.Join(repo, "extra_test.go"), "package main\n\nimport \"testing\"\n\nfunc TestExtra(t *testing.T) {}\n")
+
+	files, err := WorkingTreeChanges(repo)
+	if err != nil {
+		t.Fatalf("WorkingTreeChanges failed: %v", err)
+	}
+
+	if len(files) < 2 {
+		t.Fatalf("expected working tree changes, got %#v", files)
+	}
+}

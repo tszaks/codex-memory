@@ -46,4 +46,8 @@ func TestExplain(t *testing.T) {
 	if len(report.BlastRadius) == 0 {
 		t.Fatalf("expected explain report blast radius")
 	}
+
+	if len(report.StructuralLinks) == 0 {
+		t.Fatalf("expected explain report structural links")
+	}
 }

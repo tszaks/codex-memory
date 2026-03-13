@@ -165,11 +165,15 @@ func fileStem(name string) string {
 
 func isTestFile(name string) bool {
 	return strings.HasSuffix(name, "_test.go") ||
+		strings.HasSuffix(name, "_spec.rb") ||
 		strings.HasSuffix(name, ".test.js") ||
 		strings.HasSuffix(name, ".test.ts") ||
+		strings.HasSuffix(name, ".test.tsx") ||
 		strings.HasSuffix(name, ".spec.js") ||
 		strings.HasSuffix(name, ".spec.ts") ||
-		strings.HasSuffix(name, "_test.py")
+		strings.HasSuffix(name, ".spec.tsx") ||
+		strings.HasSuffix(name, "_test.py") ||
+		strings.HasPrefix(name, "test_")
 }
 
 func uniqueStructuralLinks(links []StructuralLink, limit int) []StructuralLink {

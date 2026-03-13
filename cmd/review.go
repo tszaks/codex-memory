@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/tszaks/codex-memory/internal/analysis"
@@ -10,11 +11,7 @@ import (
 )
 
 func runReview(out io.Writer, args []string, jsonOutput bool) error {
-	baseRef := "HEAD~1"
-	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		baseRef = strings.TrimSpace(args[0])
-	}
-	repoPath := optionalRepoArg(args, 1)
+	baseRef, repoPath := parseReviewArgs(args)
 	indexer, err := openIndexedStore(repoPath)
 	if err != nil {
 		return err
@@ -40,7 +37,16 @@ func runReview(out io.Writer, args []string, jsonOutput bool) error {
 		if len(report.ChangedFiles) > 0 {
 			lines = append(lines, "", "Changed files:")
 			for _, file := range report.ChangedFiles {
-				lines = append(lines, fmt.Sprintf("- %s (%s)", file.Path, file.RiskLevel))
+				lines = append(lines, fmt.Sprintf("- %s (%s, %s)", file.Path, file.RiskLevel, file.ChangeSource))
+				for _, reason := range file.TopReasons {
+					lines = append(lines, "  reason: "+reason)
+				}
+				for _, test := range file.SuggestedTests {
+					lines = append(lines, "  test: "+test)
+				}
+				for _, path := range file.BlastRadius {
+					lines = append(lines, "  blast: "+path)
+				}
 			}
 		}
 		if len(report.Notes) > 0 {
@@ -51,4 +57,41 @@ func runReview(out io.Writer, args []string, jsonOutput bool) error {
 		}
 		return strings.Join(lines, "\n")
 	})
+}
+
+func parseReviewArgs(args []string) (string, string) {
+	baseRef := "HEAD~1"
+	repoPath := "."
+	if len(args) == 0 {
+		return baseRef, repoPath
+	}
+
+	first := strings.TrimSpace(args[0])
+	if first == "" {
+		return baseRef, repoPath
+	}
+
+	if looksLikePath(first) {
+		repoPath = first
+		if len(args) > 1 && strings.TrimSpace(args[1]) != "" {
+			baseRef = strings.TrimSpace(args[1])
+		}
+		return baseRef, repoPath
+	}
+
+	baseRef = first
+	if len(args) > 1 && strings.TrimSpace(args[1]) != "" {
+		repoPath = strings.TrimSpace(args[1])
+	}
+	return baseRef, repoPath
+}
+
+func looksLikePath(value string) bool {
+	if value == "." || value == ".." || strings.HasPrefix(value, "/") {
+		return true
+	}
+	if info, err := os.Stat(value); err == nil && info.IsDir() {
+		return true
+	}
+	return false
 }

@@ -37,6 +37,8 @@ codex-memory index
 codex-memory explain path/to/file --json
 codex-memory safe path/to/file --json
 codex-memory plan path/to/file --json
+codex-memory changed-now --json
+codex-memory handoff origin/main --json
 ```
 
 That gives the model enough context to:
@@ -120,19 +122,41 @@ This turns the file context into a lightweight agent plan:
 - what steps to follow
 - which tests to run
 
-### 5. Review what changed before handoff
+### 5. Check the live working tree
+
+```bash
+codex-memory changed-now
+```
+
+This reports what the agent is touching right now, including:
+
+- modified tracked files
+- untracked files
+- risk level when history exists
+- suggested tests when they can be inferred
+- likely blast radius
+
+### 6. Review what changed before handoff
 
 ```bash
 codex-memory review origin/main
 ```
 
-This reviews the files changed between `origin/main` and `HEAD`, then reports:
+This reviews the files changed between `origin/main` and `HEAD`, plus the current working tree, then reports:
 
 - risky changed files
 - focused tests to run
 - likely blast radius for each changed file
 
 This is useful before asking an agent to finalize, open a PR, or hand work back to a human.
+
+### 7. Generate a handoff report
+
+```bash
+codex-memory handoff origin/main
+```
+
+This combines branch review plus current working-tree state into one final handoff payload for a human or another agent.
 
 ## Commands
 
@@ -171,12 +195,34 @@ codex-memory plan src/auth/session.ts
 
 ### `codex-memory review [base-ref]`
 
-Review changed files between a base ref and `HEAD`.
+Review changed files between a base ref and `HEAD`, then merge in the current working tree.
 
 ```bash
 codex-memory review
 codex-memory review HEAD~1
 codex-memory review origin/main
+codex-memory review /path/to/repo
+```
+
+If you pass a single directory path, it is treated as the repo path and the base ref defaults to `HEAD~1`.
+
+### `codex-memory changed-now`
+
+Inspect the files an agent is actively changing right now.
+
+```bash
+codex-memory changed-now
+codex-memory changed-now /path/to/repo
+```
+
+### `codex-memory handoff [base-ref]`
+
+Build a final handoff report from branch history plus the live working tree.
+
+```bash
+codex-memory handoff
+codex-memory handoff origin/main
+codex-memory handoff /path/to/repo
 ```
 
 ### `codex-memory risk <path>`
@@ -215,7 +261,9 @@ Examples:
 codex-memory explain src/auth/session.ts --json
 codex-memory safe src/auth/session.ts --json
 codex-memory plan src/auth/session.ts --json
+codex-memory changed-now --json
 codex-memory review origin/main --json
+codex-memory handoff origin/main --json
 ```
 
 ## What The Tool Uses
@@ -228,19 +276,9 @@ codex-memory review origin/main --json
 - author count
 - lightweight structural heuristics
 - source-to-test pairing hints
+- current working-tree changes
 
 It is intentionally small and local-first.
-
-## What It Does Not Try To Be
-
-This is not:
-
-- a hosted code intelligence platform
-- a full static-analysis engine
-- an IDE extension
-- an embeddings-first search product
-
-It is a practical memory layer for AI coding workflows.
 
 ## Development
 
@@ -250,7 +288,9 @@ go run . index
 go run . explain README.md
 go run . safe README.md
 go run . plan README.md
+go run . changed-now
 go run . review HEAD~1
+go run . handoff HEAD~1
 ```
 
 ## Notes
