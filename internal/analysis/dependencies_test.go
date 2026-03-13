@@ -114,6 +114,34 @@ func TestStructuralLinksIncludeJSImports(t *testing.T) {
 	}
 }
 
+func TestStructuralLinksIncludeTSAliasImports(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	links, err := StructuralLinks(store, "web/alias_app.ts", 10)
+	if err != nil {
+		t.Fatalf("StructuralLinks failed: %v", err)
+	}
+
+	found := false
+	for _, link := range links {
+		if link.Path == "web/session.ts" && link.Kind == "js-import" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected ts alias import link to web/session.ts, got %#v", links)
+	}
+}
+
 func TestStructuralLinksIncludePythonImports(t *testing.T) {
 	repo := indexRepo(t)
 	store, err := index.OpenStore(repo)
@@ -202,14 +230,29 @@ func TestSuggestedVerificationPlanForPythonFile(t *testing.T) {
 	if len(plan.Fast) == 0 || plan.Fast[0] != "pytest pkg/test_app.py" {
 		t.Fatalf("expected focused python verification, got %#v", plan)
 	}
-	foundFull := false
-	for _, command := range plan.Full {
-		if command == "pytest" {
-			foundFull = true
+	for _, expected := range []string{"pytest", "ruff check .", "mypy ."} {
+		found := false
+		for _, command := range plan.Full {
+			if command == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected full python verification to include %q, got %#v", expected, plan)
 		}
 	}
-	if !foundFull {
-		t.Fatalf("expected full python verification, got %#v", plan)
+	for _, expected := range []string{"pytest pkg", "pytest", "ruff check ."} {
+		found := false
+		for _, command := range plan.Safe {
+			if command == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected safe python verification to include %q, got %#v", expected, plan)
+		}
 	}
 }
 

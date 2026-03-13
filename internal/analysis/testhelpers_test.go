@@ -18,6 +18,8 @@ func indexRepoHelper(t *testing.T) string {
 	writeFile(t, filepath.Join(repo, "go.mod"), "module example.com/testrepo\n\ngo 1.26.0\n")
 	writeFile(t, filepath.Join(repo, "package.json"), "{\n  \"scripts\": {\n    \"test\": \"vitest run\",\n    \"test:unit\": \"vitest run\",\n    \"lint\": \"eslint .\",\n    \"typecheck\": \"tsc --noEmit\",\n    \"build\": \"vite build\"\n  }\n}\n")
 	writeFile(t, filepath.Join(repo, "package-lock.json"), "{}\n")
+	writeFile(t, filepath.Join(repo, "tsconfig.json"), "{\n  \"compilerOptions\": {\n    \"baseUrl\": \".\",\n    \"paths\": {\n      \"@/*\": [\"web/*\"]\n    }\n  }\n}\n")
+	writeFile(t, filepath.Join(repo, "pyproject.toml"), "[tool.pytest.ini_options]\npythonpath = [\".\"]\n\n[tool.ruff]\nline-length = 100\n\n[tool.mypy]\npython_version = \"3.12\"\n")
 	run(t, repo, "git", "add", ".")
 	run(t, repo, "git", "commit", "-m", "docs: add readme")
 
@@ -28,6 +30,7 @@ func indexRepoHelper(t *testing.T) string {
 	writeFile(t, filepath.Join(repo, "main_test.go"), "package main\n\nimport \"testing\"\n\nfunc TestMain(t *testing.T) {}\n")
 	writeFile(t, filepath.Join(repo, "web", "session.ts"), "export function session() { return 'ok' }\n")
 	writeFile(t, filepath.Join(repo, "web", "app.ts"), "import { session } from './session'\n\nexport function app() { return session() }\n")
+	writeFile(t, filepath.Join(repo, "web", "alias_app.ts"), "import { session } from '@/session'\n\nexport function aliasApp() { return session() }\n")
 	writeFile(t, filepath.Join(repo, "web", "session.test.ts"), "import { session } from './session'\n\ntest('session', () => { expect(session()).toBe('ok') })\n")
 	writeFile(t, filepath.Join(repo, "pkg", "__init__.py"), "")
 	writeFile(t, filepath.Join(repo, "pkg", "helper.py"), "def helper():\n    return 'ok'\n")
