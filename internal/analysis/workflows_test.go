@@ -47,6 +47,12 @@ func TestSafe(t *testing.T) {
 	if len(report.ActionGuidance.RunNext) == 0 {
 		t.Fatalf("expected safe action guidance")
 	}
+	if report.ActionGuidance.RecommendedNextCommand == "" {
+		t.Fatalf("expected safe recommended next command")
+	}
+	if !report.ActionGuidance.MustVerify {
+		t.Fatalf("expected safe report to require verification")
+	}
 }
 
 func TestPlan(t *testing.T) {
@@ -81,6 +87,9 @@ func TestPlan(t *testing.T) {
 	if len(report.ActionGuidance.InspectFirst) == 0 {
 		t.Fatalf("expected plan action guidance")
 	}
+	if report.ActionGuidance.RecommendedNextCommand == "" {
+		t.Fatalf("expected plan recommended next command")
+	}
 }
 
 func TestReview(t *testing.T) {
@@ -114,6 +123,12 @@ func TestReview(t *testing.T) {
 	}
 	if len(report.ActionGuidance.RunNext) == 0 {
 		t.Fatalf("expected review action guidance")
+	}
+	if report.ActionGuidance.RecommendedNextCommand == "" {
+		t.Fatalf("expected review recommended next command")
+	}
+	if !report.ActionGuidance.MustVerify {
+		t.Fatalf("expected review to require verification")
 	}
 }
 
@@ -234,5 +249,11 @@ func TestReviewDetectsTaskScopeDrift(t *testing.T) {
 	}
 	if len(report.Task.OutOfScopeChanged) == 0 {
 		t.Fatalf("expected out-of-scope changes, got %#v", report.Task)
+	}
+	if !report.ActionGuidance.MustReview {
+		t.Fatalf("expected scope drift to require review")
+	}
+	if len(report.ActionGuidance.StopSignals) == 0 {
+		t.Fatalf("expected scope drift stop signals")
 	}
 }

@@ -16,12 +16,16 @@ type BoundaryWarning struct {
 }
 
 type ActionGuidance struct {
-	InspectFirst     []string          `json:"inspect_first"`
-	RunNext          []string          `json:"run_next"`
-	SafeToEditAlone  bool              `json:"safe_to_edit_alone"`
-	AskForReviewIf   []string          `json:"ask_for_review_if"`
-	ConfidenceGaps   []string          `json:"confidence_gaps"`
-	BoundaryWarnings []BoundaryWarning `json:"boundary_warnings"`
+	InspectFirst           []string          `json:"inspect_first"`
+	RunNext                []string          `json:"run_next"`
+	RecommendedNextCommand string            `json:"recommended_next_command"`
+	SafeToEditAlone        bool              `json:"safe_to_edit_alone"`
+	MustReview             bool              `json:"must_review"`
+	MustVerify             bool              `json:"must_verify"`
+	AskForReviewIf         []string          `json:"ask_for_review_if"`
+	StopSignals            []string          `json:"stop_signals"`
+	ConfidenceGaps         []string          `json:"confidence_gaps"`
+	BoundaryWarnings       []BoundaryWarning `json:"boundary_warnings"`
 }
 
 type TaskScopeReport struct {
@@ -70,14 +74,42 @@ func buildActionGuidance(path string, risk RiskReport, confidence Confidence, st
 	}
 
 	safeToEditAlone := risk.Level == "low" && len(boundaries) == 0 && len(blastRadius) <= 2
+	mustReview := risk.Level == "high" || len(boundaries) > 0 || len(blastRadius) >= 4
+	mustVerify := len(testCommands) > 0 || risk.Level != "low" || len(boundaries) > 0
+
+	stopSignals := make([]string, 0, 4)
+	if risk.Level == "high" {
+		stopSignals = append(stopSignals, "High-risk file: inspect recent history and related files before editing.")
+	}
+	if len(boundaries) > 0 {
+		stopSignals = append(stopSignals, "Sensitive boundary touched: get an extra review pass before handoff.")
+	}
+	if len(blastRadius) >= 4 {
+		stopSignals = append(stopSignals, "Blast radius is broad: review likely impact files before widening the change.")
+	}
+	if confidence.Level == "low" {
+		stopSignals = append(stopSignals, "Confidence is low: treat the guidance as a hint, not a guarantee.")
+	}
+	if len(testCommands) == 0 {
+		stopSignals = append(stopSignals, "No focused test command was inferred: verify manually before handoff.")
+	}
+
+	recommendedNextCommand := ""
+	if len(runNext) > 0 {
+		recommendedNextCommand = runNext[0]
+	}
 
 	return ActionGuidance{
-		InspectFirst:     uniqueStrings(inspectFirst, 4),
-		RunNext:          uniqueStrings(runNext, 3),
-		SafeToEditAlone:  safeToEditAlone,
-		AskForReviewIf:   uniqueStrings(askForReviewIf, 4),
-		ConfidenceGaps:   uniqueStrings(confidenceGaps, 4),
-		BoundaryWarnings: boundaries,
+		InspectFirst:           uniqueStrings(inspectFirst, 4),
+		RunNext:                uniqueStrings(runNext, 3),
+		RecommendedNextCommand: recommendedNextCommand,
+		SafeToEditAlone:        safeToEditAlone,
+		MustReview:             mustReview,
+		MustVerify:             mustVerify,
+		AskForReviewIf:         uniqueStrings(askForReviewIf, 4),
+		StopSignals:            uniqueStrings(stopSignals, 4),
+		ConfidenceGaps:         uniqueStrings(confidenceGaps, 4),
+		BoundaryWarnings:       boundaries,
 	}
 }
 

@@ -43,10 +43,21 @@ func renderActionGuidance(guidance analysis.ActionGuidance) []string {
 			lines = append(lines, "- "+item)
 		}
 	}
+	if guidance.RecommendedNextCommand != "" {
+		lines = append(lines, "Recommended next command: "+guidance.RecommendedNextCommand)
+	}
 	lines = append(lines, fmt.Sprintf("Safe to edit alone: %t", guidance.SafeToEditAlone))
+	lines = append(lines, fmt.Sprintf("Must review: %t", guidance.MustReview))
+	lines = append(lines, fmt.Sprintf("Must verify: %t", guidance.MustVerify))
 	if len(guidance.AskForReviewIf) > 0 {
 		lines = append(lines, "Ask for review if:")
 		for _, item := range guidance.AskForReviewIf {
+			lines = append(lines, "- "+item)
+		}
+	}
+	if len(guidance.StopSignals) > 0 {
+		lines = append(lines, "Stop signals:")
+		for _, item := range guidance.StopSignals {
 			lines = append(lines, "- "+item)
 		}
 	}

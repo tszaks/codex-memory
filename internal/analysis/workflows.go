@@ -279,6 +279,18 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 	if task.HasScopeDrift {
 		notes = append(notes, fmt.Sprintf("Active task drifted outside planned scope: %s.", strings.Join(task.OutOfScopeChanged, ", ")))
 		actionGuidance.AskForReviewIf = uniqueStrings(append(actionGuidance.AskForReviewIf, "the change drifted outside the active task scope"), 5)
+		actionGuidance.StopSignals = uniqueStrings(append(actionGuidance.StopSignals, "Task scope drift detected: review out-of-scope files before handoff."), 5)
+		actionGuidance.MustReview = true
+	}
+	if highRiskCount > 0 {
+		actionGuidance.StopSignals = uniqueStrings(append(actionGuidance.StopSignals, fmt.Sprintf("%d high-risk changed file(s) need extra review before handoff.", highRiskCount)), 5)
+		actionGuidance.MustReview = true
+	}
+	if len(reviewFast) > 0 || len(reviewSafe) > 0 || len(reviewFull) > 0 {
+		actionGuidance.MustVerify = true
+	}
+	if actionGuidance.RecommendedNextCommand == "" && len(verification.Fast) > 0 {
+		actionGuidance.RecommendedNextCommand = verification.Fast[0]
 	}
 
 	summary := fmt.Sprintf("Review %d changed files before handing this branch back to an agent.", len(changed))

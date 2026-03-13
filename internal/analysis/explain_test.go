@@ -61,4 +61,10 @@ func TestExplain(t *testing.T) {
 	if report.Confidence.Level == "" {
 		t.Fatalf("expected explain confidence")
 	}
+	if report.ActionGuidance.RecommendedNextCommand == "" {
+		t.Fatalf("expected explain recommended next command")
+	}
+	if !report.ActionGuidance.MustVerify {
+		t.Fatalf("expected explain to require verification")
+	}
 }
