@@ -18,6 +18,7 @@ type StructuralLink struct {
 }
 
 var goSymbolRegex = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+var jsImportRegex = regexp.MustCompile(`(?m)(?:import|export)[^'"\n]*from\s+['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)`)
 
 func StructuralLinks(store *db.Store, targetPath string, limit int) ([]StructuralLink, error) {
 	normalized, err := normalizeRepoPath(store.RepoRoot, targetPath)
@@ -74,6 +75,18 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 				Path:   candidate,
 				Kind:   "go-dependent",
 				Reason: "This Go file appears to reference the target file's symbol stem.",
+			})
+		case referencesJSImport(normalized, targetContent, candidate):
+			out = append(out, StructuralLink{
+				Path:   candidate,
+				Kind:   "js-import",
+				Reason: "Target file imports this JS/TS module with a relative path.",
+			})
+		case referencesJSImport(candidate, candidateContent, normalized):
+			out = append(out, StructuralLink{
+				Path:   candidate,
+				Kind:   "js-dependent",
+				Reason: "This JS/TS file imports the target module with a relative path.",
 			})
 		case candidateDir == targetDir && candidateIsTest:
 			out = append(out, StructuralLink{
@@ -261,6 +274,54 @@ func referencesGoFile(content []byte, stem string) bool {
 		}
 	}
 	return false
+}
+
+func referencesJSImport(sourcePath string, content []byte, candidatePath string) bool {
+	if len(content) == 0 || !isJSImportFile(sourcePath) || !isJSImportFile(candidatePath) {
+		return false
+	}
+
+	sourceDir := filepath.ToSlash(filepath.Dir(sourcePath))
+	for _, match := range jsImportRegex.FindAllStringSubmatch(string(content), -1) {
+		spec := ""
+		if len(match) > 1 && match[1] != "" {
+			spec = match[1]
+		} else if len(match) > 2 {
+			spec = match[2]
+		}
+		if !strings.HasPrefix(spec, ".") {
+			continue
+		}
+		for _, resolved := range resolveJSImportCandidates(sourceDir, spec) {
+			if resolved == candidatePath {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resolveJSImportCandidates(sourceDir, spec string) []string {
+	base := filepath.ToSlash(filepath.Clean(filepath.Join(sourceDir, spec)))
+	candidates := []string{
+		base,
+		base + ".js",
+		base + ".jsx",
+		base + ".ts",
+		base + ".tsx",
+		base + "/index.js",
+		base + "/index.jsx",
+		base + "/index.ts",
+		base + "/index.tsx",
+	}
+	return uniqueStrings(candidates, 0)
+}
+
+func isJSImportFile(path string) bool {
+	return strings.HasSuffix(path, ".js") ||
+		strings.HasSuffix(path, ".jsx") ||
+		strings.HasSuffix(path, ".ts") ||
+		strings.HasSuffix(path, ".tsx")
 }
 
 func hasGoTests(paths []string) bool {

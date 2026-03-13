@@ -27,6 +27,10 @@ func runChangedNow(out io.Writer, args []string, jsonOutput bool) error {
 		for _, file := range report.Files {
 			lines = append(lines, fmt.Sprintf("- %s (%s, %s)", file.Path, file.RiskLevel, file.WorkingTreeStatus))
 		}
+		if taskLines := renderTaskScope(report.Task); len(taskLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, taskLines...)
+		}
 		return strings.Join(lines, "\n")
 	})
 }

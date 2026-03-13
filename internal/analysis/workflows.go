@@ -9,26 +9,28 @@ import (
 )
 
 type SafeReport struct {
-	Path           string     `json:"path"`
-	Verdict        string     `json:"verdict"`
-	Summary        string     `json:"summary"`
-	RequiredChecks []string   `json:"required_checks"`
-	SuggestedTests []string   `json:"suggested_tests"`
-	TestCommands   []string   `json:"test_commands"`
-	BlastRadius    []string   `json:"blast_radius"`
-	Confidence     Confidence `json:"confidence"`
-	Risk           RiskReport `json:"risk"`
+	Path           string         `json:"path"`
+	Verdict        string         `json:"verdict"`
+	Summary        string         `json:"summary"`
+	RequiredChecks []string       `json:"required_checks"`
+	SuggestedTests []string       `json:"suggested_tests"`
+	TestCommands   []string       `json:"test_commands"`
+	BlastRadius    []string       `json:"blast_radius"`
+	Confidence     Confidence     `json:"confidence"`
+	ActionGuidance ActionGuidance `json:"action_guidance"`
+	Risk           RiskReport     `json:"risk"`
 }
 
 type PlanReport struct {
-	Path           string     `json:"path"`
-	Goal           string     `json:"goal"`
-	Steps          []string   `json:"steps"`
-	FilesToInspect []string   `json:"files_to_inspect"`
-	TestsToRun     []string   `json:"tests_to_run"`
-	TestCommands   []string   `json:"test_commands"`
-	Confidence     Confidence `json:"confidence"`
-	Risk           RiskReport `json:"risk"`
+	Path           string         `json:"path"`
+	Goal           string         `json:"goal"`
+	Steps          []string       `json:"steps"`
+	FilesToInspect []string       `json:"files_to_inspect"`
+	TestsToRun     []string       `json:"tests_to_run"`
+	TestCommands   []string       `json:"test_commands"`
+	Confidence     Confidence     `json:"confidence"`
+	ActionGuidance ActionGuidance `json:"action_guidance"`
+	Risk           RiskReport     `json:"risk"`
 }
 
 type ReviewedFile struct {
@@ -41,14 +43,17 @@ type ReviewedFile struct {
 }
 
 type ReviewReport struct {
-	BaseRef       string         `json:"base_ref"`
-	HeadRef       string         `json:"head_ref"`
-	Summary       string         `json:"summary"`
-	ChangedFiles  []ReviewedFile `json:"changed_files"`
-	RequiredTests []string       `json:"required_tests"`
-	TestCommands  []string       `json:"test_commands"`
-	Confidence    Confidence     `json:"confidence"`
-	Notes         []string       `json:"notes"`
+	BaseRef          string            `json:"base_ref"`
+	HeadRef          string            `json:"head_ref"`
+	Summary          string            `json:"summary"`
+	ChangedFiles     []ReviewedFile    `json:"changed_files"`
+	RequiredTests    []string          `json:"required_tests"`
+	TestCommands     []string          `json:"test_commands"`
+	Confidence       Confidence        `json:"confidence"`
+	ActionGuidance   ActionGuidance    `json:"action_guidance"`
+	Task             TaskScopeReport   `json:"task"`
+	BoundaryWarnings []BoundaryWarning `json:"boundary_warnings"`
+	Notes            []string          `json:"notes"`
 }
 
 type ChangedNowFile struct {
@@ -62,6 +67,7 @@ type ChangedNowFile struct {
 type ChangedNowReport struct {
 	Summary string           `json:"summary"`
 	Files   []ChangedNowFile `json:"files"`
+	Task    TaskScopeReport  `json:"task"`
 }
 
 type HandoffReport struct {
@@ -69,6 +75,7 @@ type HandoffReport struct {
 	Review      ReviewReport     `json:"review"`
 	ChangedNow  ChangedNowReport `json:"changed_now"`
 	NextActions []string         `json:"next_actions"`
+	Task        TaskScopeReport  `json:"task"`
 }
 
 func Safe(store *db.Store, targetPath string) (SafeReport, error) {
@@ -123,6 +130,7 @@ func Safe(store *db.Store, targetPath string) (SafeReport, error) {
 		TestCommands:   testCommands,
 		BlastRadius:    blastRadius,
 		Confidence:     buildConfidence(true, len(structuralLinks), len(tests), len(blastRadius)),
+		ActionGuidance: buildActionGuidance(risk.Path, risk, buildConfidence(true, len(structuralLinks), len(tests), len(blastRadius)), structuralLinks, blastRadius, testCommands),
 		Risk:           risk,
 	}, nil
 }
@@ -150,6 +158,7 @@ func Plan(store *db.Store, targetPath string) (PlanReport, error) {
 		TestsToRun:     safe.SuggestedTests,
 		TestCommands:   safe.TestCommands,
 		Confidence:     safe.Confidence,
+		ActionGuidance: safe.ActionGuidance,
 		Risk:           safe.Risk,
 	}, nil
 }
@@ -188,6 +197,7 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 	requiredTests := make([]string, 0)
 	testCommands := make([]string, 0)
 	notes := make([]string, 0)
+	allBoundaries := make([]BoundaryWarning, 0)
 	highRiskCount := 0
 
 	for _, path := range changed {
@@ -223,6 +233,7 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 
 		requiredTests = append(requiredTests, tests...)
 		testCommands = append(testCommands, commands...)
+		allBoundaries = append(allBoundaries, detectBoundaryWarnings(append([]string{path}, blastRadius...))...)
 		reviewed = append(reviewed, ReviewedFile{
 			Path:           path,
 			ChangeSource:   changeSources[path],
@@ -233,20 +244,34 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		})
 	}
 
+	task, err := activeTaskScope(store, changed)
+	if err != nil {
+		return ReviewReport{}, err
+	}
+	confidence := buildConfidence(len(reviewed) > 0, 1, len(requiredTests), len(reviewed))
+	actionGuidance := buildActionGuidance("working-tree", RiskReport{Level: "medium"}, confidence, nil, pathsFromReviewed(reviewed), uniqueStrings(testCommands, 5))
+	if task.HasScopeDrift {
+		notes = append(notes, fmt.Sprintf("Active task drifted outside planned scope: %s.", strings.Join(task.OutOfScopeChanged, ", ")))
+		actionGuidance.AskForReviewIf = uniqueStrings(append(actionGuidance.AskForReviewIf, "the change drifted outside the active task scope"), 5)
+	}
+
 	summary := fmt.Sprintf("Review %d changed files before handing this branch back to an agent.", len(changed))
 	if highRiskCount > 0 {
 		summary = fmt.Sprintf("Review %d changed files carefully. %d high-risk file(s) need extra attention.", len(changed), highRiskCount)
 	}
 
 	return ReviewReport{
-		BaseRef:       baseRef,
-		HeadRef:       "HEAD",
-		Summary:       summary,
-		ChangedFiles:  reviewed,
-		RequiredTests: uniqueStrings(requiredTests, 10),
-		TestCommands:  uniqueStrings(testCommands, 5),
-		Confidence:    buildConfidence(len(reviewed) > 0, 1, len(requiredTests), len(reviewed)),
-		Notes:         uniqueStrings(notes, 10),
+		BaseRef:          baseRef,
+		HeadRef:          "HEAD",
+		Summary:          summary,
+		ChangedFiles:     reviewed,
+		RequiredTests:    uniqueStrings(requiredTests, 10),
+		TestCommands:     uniqueStrings(testCommands, 5),
+		Confidence:       confidence,
+		ActionGuidance:   actionGuidance,
+		Task:             task,
+		BoundaryWarnings: uniqueBoundaryWarnings(allBoundaries),
+		Notes:            uniqueStrings(notes, 10),
 	}, nil
 }
 
@@ -286,9 +311,19 @@ func ChangedNow(store *db.Store) (ChangedNowReport, error) {
 		})
 	}
 
+	changedPaths := make([]string, 0, len(files))
+	for _, file := range files {
+		changedPaths = append(changedPaths, file.Path)
+	}
+	task, err := activeTaskScope(store, changedPaths)
+	if err != nil {
+		return ChangedNowReport{}, err
+	}
+
 	return ChangedNowReport{
 		Summary: fmt.Sprintf("Working tree currently touches %d file(s).", len(files)),
 		Files:   files,
+		Task:    task,
 	}, nil
 }
 
@@ -312,6 +347,9 @@ func Handoff(store *db.Store, baseRef string) (HandoffReport, error) {
 	if len(review.ChangedFiles) > 0 {
 		nextActions = append(nextActions, "Open the highest-risk changed files and scan their blast radius.")
 	}
+	if review.Task.HasScopeDrift {
+		nextActions = append(nextActions, fmt.Sprintf("Resolve task scope drift before handoff: %s.", strings.Join(review.Task.OutOfScopeChanged, ", ")))
+	}
 	if len(nextActions) == 0 {
 		nextActions = append(nextActions, "No extra handoff actions suggested.")
 	}
@@ -321,6 +359,7 @@ func Handoff(store *db.Store, baseRef string) (HandoffReport, error) {
 		Review:      review,
 		ChangedNow:  changedNow,
 		NextActions: nextActions,
+		Task:        review.Task,
 	}, nil
 }
 
@@ -330,4 +369,25 @@ func mapKeysSorted(values map[string]string) []string {
 		keys = append(keys, key)
 	}
 	return uniqueStrings(keys, 0)
+}
+
+func pathsFromReviewed(files []ReviewedFile) []string {
+	out := make([]string, 0, len(files))
+	for _, file := range files {
+		out = append(out, file.Path)
+	}
+	return out
+}
+
+func uniqueBoundaryWarnings(values []BoundaryWarning) []BoundaryWarning {
+	seen := map[string]struct{}{}
+	out := make([]BoundaryWarning, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value.Label]; ok {
+			continue
+		}
+		seen[value.Label] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

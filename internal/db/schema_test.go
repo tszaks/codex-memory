@@ -1,9 +1,11 @@
 package db
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestSchemaInitializes(t *testing.T) {
@@ -14,7 +16,7 @@ func TestSchemaInitializes(t *testing.T) {
 	}
 	defer store.Close()
 
-	tables := []string{"repos", "files", "commits", "file_commits", "cochange_edges", "decision_notes"}
+	tables := []string{"repos", "files", "commits", "file_commits", "cochange_edges", "decision_notes", "active_tasks"}
 	for _, table := range tables {
 		row := store.DB().QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table)
 		var name string
@@ -150,5 +152,45 @@ func TestRepoReturnsHelpfulErrorWhenNotIndexedYet(t *testing.T) {
 	_, err = store.Repo()
 	if !errors.Is(err, ErrRepoNotIndexed) {
 		t.Fatalf("expected ErrRepoNotIndexed, got %v", err)
+	}
+}
+
+func TestActiveTaskRoundTrip(t *testing.T) {
+	repo := t.TempDir()
+	store, err := OpenPath(repo, t.TempDir()+"/test.sqlite")
+	if err != nil {
+		t.Fatalf("OpenPath failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.DB().Exec(`INSERT INTO repos (root, branch, last_indexed_commit, indexed_at) VALUES (?, 'main', 'abc123', '2026-03-13T12:00:00Z')`, repo); err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+
+	task := ActiveTask{
+		Goal:       "Tighten review output",
+		ScopePaths: []string{"cmd/review.go", "internal/analysis"},
+		StartedAt:  time.Date(2026, 3, 13, 12, 30, 0, 0, time.UTC),
+	}
+	if err := store.SaveActiveTask(task); err != nil {
+		t.Fatalf("SaveActiveTask failed: %v", err)
+	}
+
+	saved, err := store.ActiveTask()
+	if err != nil {
+		t.Fatalf("ActiveTask failed: %v", err)
+	}
+	if saved.Goal != task.Goal {
+		t.Fatalf("expected goal %q, got %q", task.Goal, saved.Goal)
+	}
+	if len(saved.ScopePaths) != 2 {
+		t.Fatalf("expected scope paths, got %#v", saved.ScopePaths)
+	}
+
+	if err := store.ClearActiveTask(); err != nil {
+		t.Fatalf("ClearActiveTask failed: %v", err)
+	}
+	if _, err := store.ActiveTask(); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected sql.ErrNoRows after clear, got %v", err)
 	}
 }

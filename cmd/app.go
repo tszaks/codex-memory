@@ -56,6 +56,8 @@ func (a *App) Run(args []string) error {
 		return runChangedNow(a.stdout, filtered[1:], jsonOutput)
 	case "handoff":
 		return runHandoff(a.stdout, filtered[1:], jsonOutput)
+	case "task":
+		return runTask(a.stdout, filtered[1:], jsonOutput)
 	default:
 		a.printHelp()
 		return fmt.Errorf("unknown command: %s", filtered[0])
@@ -75,7 +77,10 @@ Usage:
   codex-memory plan <path> [repo-path] [--json]
   codex-memory review [base-ref] [repo-path] [--json]
   codex-memory changed-now [repo-path] [--json]
-  codex-memory handoff [base-ref] [repo-path] [--json]`)
+  codex-memory handoff [base-ref] [repo-path] [--json]
+  codex-memory task start <goal> [scope-paths...] [--json]
+  codex-memory task show [--json]
+  codex-memory task clear [--json]`)
 }
 
 func requireArg(args []string, field string) (string, error) {

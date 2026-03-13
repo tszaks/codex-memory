@@ -74,6 +74,10 @@ func runExplain(out io.Writer, args []string, jsonOutput bool) error {
 				lines = append(lines, fmt.Sprintf("- %s (%s)", link.Path, link.Kind))
 			}
 		}
+		if actionLines := renderActionGuidance(report.ActionGuidance); len(actionLines) > 0 {
+			lines = append(lines, "", "Agent guidance:")
+			lines = append(lines, actionLines...)
+		}
 		lines = append(lines, "", renderNeighbors(report.Neighbors))
 		if len(report.Decisions) > 0 {
 			lines = append(lines, "", "Decision notes:")

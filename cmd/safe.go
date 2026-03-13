@@ -56,6 +56,10 @@ func runSafe(out io.Writer, args []string, jsonOutput bool) error {
 				lines = append(lines, "- "+path)
 			}
 		}
+		if actionLines := renderActionGuidance(report.ActionGuidance); len(actionLines) > 0 {
+			lines = append(lines, "", "Agent guidance:")
+			lines = append(lines, actionLines...)
+		}
 		return strings.Join(lines, "\n")
 	})
 }

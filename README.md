@@ -9,6 +9,8 @@ It gives an LLM fast repo context before, during, and after edits:
 - what tests are most relevant
 - what focused test command to run first, plus the safer fallback
 - what the blast radius probably is
+- what action an agent should take next
+- whether the current task drifted outside its planned scope
 - what changed in the working tree right now
 
 ## Why It Matters
@@ -34,6 +36,8 @@ codex-memory plan <path>
 codex-memory changed-now
 codex-memory review [base-ref]
 codex-memory handoff [base-ref]
+codex-memory task start "Tighten auth flow" src/auth cmd
+codex-memory task show
 ```
 
 Use `--json` with any command for agent-friendly output.
@@ -45,6 +49,7 @@ codex-memory index
 codex-memory explain path/to/file --json
 codex-memory safe path/to/file --json
 codex-memory plan path/to/file --json
+codex-memory task start "Tighten auth flow" src/auth cmd --json
 codex-memory changed-now --json
 codex-memory handoff origin/main --json
 ```
@@ -70,10 +75,11 @@ go run . --help
 - `safe`: tells an agent how cautious it should be, with confidence
 - `plan`: gives a lightweight edit plan plus likely test commands
 - `changed-now`: shows the live working tree
-- `review`: reviews branch diff plus working-tree changes with confidence
+- `review`: reviews branch diff plus working-tree changes with confidence, task drift, and boundary warnings
 - `handoff`: generates a final summary before handoff
+- `task`: stores the current goal and planned scope so drift shows up in review and handoff
 
-It also handles brand-new files better now by inferring likely related files and tests even before they have indexed history.
+It also handles brand-new files better now by inferring likely related files and tests even before they have indexed history, and it adds lightweight JS/TS import signals plus boundary warnings for areas like auth, config, DB, API, payments, and jobs.
 
 ## Example
 

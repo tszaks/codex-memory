@@ -21,6 +21,7 @@ type ExplainReport struct {
 	BlastRadius     []string         `json:"blast_radius"`
 	StructuralLinks []StructuralLink `json:"structural_links"`
 	Confidence      Confidence       `json:"confidence"`
+	ActionGuidance  ActionGuidance   `json:"action_guidance"`
 	Risk            RiskReport       `json:"risk"`
 	RecentCommits   []CommitSummary  `json:"recent_commits"`
 	Decisions       []Decision       `json:"decisions"`
@@ -84,6 +85,7 @@ LIMIT 5
 		return ExplainReport{}, err
 	}
 	confidence := buildConfidence(true, len(structuralLinks), len(suggestedTests), len(blastRadius))
+	actionGuidance := buildActionGuidance(risk.Path, risk, confidence, structuralLinks, blastRadius, testCommands)
 
 	return ExplainReport{
 		Path:            risk.Path,
@@ -94,6 +96,7 @@ LIMIT 5
 		BlastRadius:     blastRadius,
 		StructuralLinks: structuralLinks,
 		Confidence:      confidence,
+		ActionGuidance:  actionGuidance,
 		Risk:            risk,
 		RecentCommits:   commits,
 		Decisions:       decisions,

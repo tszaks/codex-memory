@@ -58,4 +58,11 @@ CREATE TABLE IF NOT EXISTS decision_notes (
   committed_at TEXT NOT NULL,
   PRIMARY KEY (repo_id, source_type, source_ref)
 );
+
+CREATE TABLE IF NOT EXISTS active_tasks (
+  repo_id INTEGER PRIMARY KEY,
+  goal TEXT NOT NULL,
+  scope_paths TEXT NOT NULL,
+  started_at TEXT NOT NULL
+);
 `

@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -58,6 +59,12 @@ type DecisionNote struct {
 	Title       string
 	Body        string
 	CommittedAt time.Time
+}
+
+type ActiveTask struct {
+	Goal       string
+	ScopePaths []string
+	StartedAt  time.Time
 }
 
 func Open(repoRoot string) (*Store, error) {
@@ -220,7 +227,7 @@ func (s *Store) Repo() (RepoRecord, error) {
 }
 
 func (s *Store) ResetRepoData(repoID int64) error {
-	tables := []string{"files", "commits", "file_commits", "cochange_edges", "decision_notes"}
+	tables := []string{"files", "commits", "file_commits", "cochange_edges", "decision_notes", "active_tasks"}
 	for _, table := range tables {
 		if _, err := s.conn.Exec(fmt.Sprintf("DELETE FROM %s WHERE repo_id = ?", table), repoID); err != nil {
 			return fmt.Errorf("reset %s: %w", table, err)
@@ -288,6 +295,71 @@ VALUES (?, ?, ?, ?, ?, ?)
 `, repoID, note.SourceType, note.SourceRef, note.Title, note.Body, note.CommittedAt.UTC().Format(time.RFC3339))
 	if err != nil {
 		return fmt.Errorf("upsert decision note %s: %w", note.SourceRef, err)
+	}
+	return nil
+}
+
+func (s *Store) SaveActiveTask(task ActiveTask) error {
+	repo, err := s.Repo()
+	if err != nil {
+		return err
+	}
+
+	scopeJSON, err := json.Marshal(task.ScopePaths)
+	if err != nil {
+		return fmt.Errorf("marshal task scope: %w", err)
+	}
+
+	startedAt := task.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+
+	_, err = s.conn.Exec(`
+INSERT INTO active_tasks (repo_id, goal, scope_paths, started_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(repo_id) DO UPDATE SET
+  goal = excluded.goal,
+  scope_paths = excluded.scope_paths,
+  started_at = excluded.started_at
+`, repo.ID, task.Goal, string(scopeJSON), startedAt.UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("save active task: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ActiveTask() (ActiveTask, error) {
+	repo, err := s.Repo()
+	if err != nil {
+		return ActiveTask{}, err
+	}
+
+	row := s.conn.QueryRow(`SELECT goal, scope_paths, started_at FROM active_tasks WHERE repo_id = ?`, repo.ID)
+	var task ActiveTask
+	var scopeJSON string
+	var startedAt string
+	if err := row.Scan(&task.Goal, &scopeJSON, &startedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ActiveTask{}, sql.ErrNoRows
+		}
+		return ActiveTask{}, fmt.Errorf("read active task: %w", err)
+	}
+
+	if err := json.Unmarshal([]byte(scopeJSON), &task.ScopePaths); err != nil {
+		return ActiveTask{}, fmt.Errorf("unmarshal task scope: %w", err)
+	}
+	task.StartedAt, _ = time.Parse(time.RFC3339, startedAt)
+	return task, nil
+}
+
+func (s *Store) ClearActiveTask() error {
+	repo, err := s.Repo()
+	if err != nil {
+		return err
+	}
+	if _, err := s.conn.Exec(`DELETE FROM active_tasks WHERE repo_id = ?`, repo.ID); err != nil {
+		return fmt.Errorf("clear active task: %w", err)
 	}
 	return nil
 }

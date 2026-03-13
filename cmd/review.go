@@ -56,6 +56,20 @@ func runReview(out io.Writer, args []string, jsonOutput bool) error {
 				}
 			}
 		}
+		if actionLines := renderActionGuidance(report.ActionGuidance); len(actionLines) > 0 {
+			lines = append(lines, "", "Agent guidance:")
+			lines = append(lines, actionLines...)
+		}
+		if taskLines := renderTaskScope(report.Task); len(taskLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, taskLines...)
+		}
+		if len(report.BoundaryWarnings) > 0 {
+			lines = append(lines, "", "Boundary warnings:")
+			for _, item := range report.BoundaryWarnings {
+				lines = append(lines, fmt.Sprintf("- %s: %s", item.Label, item.Reason))
+			}
+		}
 		if len(report.Notes) > 0 {
 			lines = append(lines, "", "Notes:")
 			for _, note := range report.Notes {

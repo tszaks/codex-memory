@@ -3,7 +3,9 @@ package analysis
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/tszaks/codex-memory/internal/db"
 	"github.com/tszaks/codex-memory/internal/index"
 )
 
@@ -39,6 +41,9 @@ func TestSafe(t *testing.T) {
 	if report.Confidence.Level == "" {
 		t.Fatalf("expected safe confidence")
 	}
+	if len(report.ActionGuidance.RunNext) == 0 {
+		t.Fatalf("expected safe action guidance")
+	}
 }
 
 func TestPlan(t *testing.T) {
@@ -67,6 +72,9 @@ func TestPlan(t *testing.T) {
 	if len(report.TestCommands) == 0 {
 		t.Fatalf("expected plan test commands")
 	}
+	if len(report.ActionGuidance.InspectFirst) == 0 {
+		t.Fatalf("expected plan action guidance")
+	}
 }
 
 func TestReview(t *testing.T) {
@@ -94,6 +102,9 @@ func TestReview(t *testing.T) {
 	}
 	if len(report.TestCommands) == 0 {
 		t.Fatalf("expected review test commands")
+	}
+	if len(report.ActionGuidance.RunNext) == 0 {
+		t.Fatalf("expected review action guidance")
 	}
 }
 
@@ -178,5 +189,41 @@ func TestHandoff(t *testing.T) {
 	}
 	if len(report.NextActions) == 0 {
 		t.Fatalf("expected handoff next actions")
+	}
+}
+
+func TestReviewDetectsTaskScopeDrift(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	if err := store.SaveActiveTask(db.ActiveTask{
+		Goal:       "Adjust main entrypoint only",
+		ScopePaths: []string{"main.go"},
+		StartedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveActiveTask failed: %v", err)
+	}
+
+	writeFile(t, filepath.Join(repo, "main.go"), "package main\n\nfunc main() { println(\"changed\") }\n")
+	writeFile(t, filepath.Join(repo, "config.yaml"), "key: drifted\n")
+
+	report, err := Review(store, "HEAD~1")
+	if err != nil {
+		t.Fatalf("Review failed: %v", err)
+	}
+
+	if !report.Task.HasScopeDrift {
+		t.Fatalf("expected task scope drift, got %#v", report.Task)
+	}
+	if len(report.Task.OutOfScopeChanged) == 0 {
+		t.Fatalf("expected out-of-scope changes, got %#v", report.Task)
 	}
 }
