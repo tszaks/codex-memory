@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -476,8 +477,19 @@ func inferredVerificationPlan(repoRoot, normalized string, tests []string) Verif
 	if jsTest != "" {
 		packageManager := inferPackageManager(repoRoot)
 		if packageManager != "" {
-			plan.Fast = append(plan.Fast, packageManager+" test -- "+jsTest)
-			plan.Safe = append(plan.Safe, packageManager+" test")
+			scripts := packageScripts(repoRoot)
+			switch {
+			case hasScript(scripts, "test:unit"):
+				plan.Fast = append(plan.Fast, targetedTestScriptCommand(packageManager, "test:unit", jsTest))
+			case hasScript(scripts, "test"):
+				plan.Fast = append(plan.Fast, targetedTestScriptCommand(packageManager, "test", jsTest))
+			}
+			if hasScript(scripts, "test:unit") {
+				plan.Safe = append(plan.Safe, scriptCommand(packageManager, "test:unit"))
+			}
+			if hasScript(scripts, "test") {
+				plan.Safe = append(plan.Safe, scriptCommand(packageManager, "test"))
+			}
 			plan.Full = append(plan.Full, inferJSTieredFullCheck(repoRoot, packageManager)...)
 		}
 		return normalizeVerificationPlan(plan)
@@ -485,7 +497,13 @@ func inferredVerificationPlan(repoRoot, normalized string, tests []string) Verif
 	if isJSImportFile(normalized) {
 		packageManager := inferPackageManager(repoRoot)
 		if packageManager != "" {
-			plan.Safe = append(plan.Safe, packageManager+" test")
+			scripts := packageScripts(repoRoot)
+			if hasScript(scripts, "test:unit") {
+				plan.Safe = append(plan.Safe, scriptCommand(packageManager, "test:unit"))
+			}
+			if hasScript(scripts, "test") {
+				plan.Safe = append(plan.Safe, scriptCommand(packageManager, "test"))
+			}
 			plan.Full = append(plan.Full, inferJSTieredFullCheck(repoRoot, packageManager)...)
 		}
 		return normalizeVerificationPlan(plan)
@@ -549,12 +567,15 @@ func inferPackageManager(repoRoot string) string {
 }
 
 func inferJSTieredFullCheck(repoRoot, packageManager string) []string {
-	commands := []string{packageManager + " test"}
-	if hasPackageScript(repoRoot, "lint") {
-		commands = append(commands, packageManager+" lint")
+	scripts := packageScripts(repoRoot)
+	commands := make([]string, 0, 4)
+	if hasScript(scripts, "test") {
+		commands = append(commands, scriptCommand(packageManager, "test"))
 	}
-	if hasPackageScript(repoRoot, "build") {
-		commands = append(commands, packageManager+" build")
+	for _, script := range []string{"lint", "typecheck", "check", "build"} {
+		if hasScript(scripts, script) {
+			commands = append(commands, scriptCommand(packageManager, script))
+		}
 	}
 	return commands
 }
@@ -583,11 +604,55 @@ func normalizeVerificationPlan(plan VerificationPlan) VerificationPlan {
 }
 
 func hasPackageScript(repoRoot, script string) bool {
+	return hasScript(packageScripts(repoRoot), script)
+}
+
+func packageScripts(repoRoot string) map[string]string {
 	content, err := os.ReadFile(filepath.Join(repoRoot, "package.json"))
 	if err != nil {
+		return nil
+	}
+	var parsed struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		return nil
+	}
+	return parsed.Scripts
+}
+
+func hasScript(scripts map[string]string, name string) bool {
+	if len(scripts) == 0 {
 		return false
 	}
-	return strings.Contains(string(content), `"`+script+`"`)
+	_, ok := scripts[name]
+	return ok
+}
+
+func scriptCommand(packageManager, script string) string {
+	switch packageManager {
+	case "npm":
+		if script == "test" {
+			return "npm test"
+		}
+		return "npm run " + script
+	case "yarn":
+		return "yarn " + script
+	case "pnpm":
+		return "pnpm " + script
+	case "bun":
+		return "bun run " + script
+	default:
+		return packageManager + " " + script
+	}
+}
+
+func targetedTestScriptCommand(packageManager, script, testPath string) string {
+	base := scriptCommand(packageManager, script)
+	if testPath == "" {
+		return base
+	}
+	return base + " -- " + testPath
 }
 
 func resolvePyImportCandidates(sourceDir, spec string) []string {

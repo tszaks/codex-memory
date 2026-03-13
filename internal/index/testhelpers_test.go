@@ -16,6 +16,8 @@ func gitlogTestRepoHelper(t *testing.T) string {
 
 	writeFile(t, filepath.Join(repo, "README.md"), "# test\n")
 	writeFile(t, filepath.Join(repo, "go.mod"), "module example.com/testrepo\n\ngo 1.26.0\n")
+	writeFile(t, filepath.Join(repo, "package.json"), "{\n  \"scripts\": {\n    \"test\": \"vitest run\",\n    \"test:unit\": \"vitest run\",\n    \"lint\": \"eslint .\",\n    \"typecheck\": \"tsc --noEmit\",\n    \"build\": \"vite build\"\n  }\n}\n")
+	writeFile(t, filepath.Join(repo, "package-lock.json"), "{}\n")
 	run(t, repo, "git", "add", ".")
 	run(t, repo, "git", "commit", "-m", "docs: add readme")
 

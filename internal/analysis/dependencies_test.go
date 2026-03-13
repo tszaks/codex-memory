@@ -212,3 +212,37 @@ func TestSuggestedVerificationPlanForPythonFile(t *testing.T) {
 		t.Fatalf("expected full python verification, got %#v", plan)
 	}
 }
+
+func TestSuggestedVerificationPlanUsesRepoScriptsForJSTS(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	plan, err := SuggestedVerificationPlan(store, "web/app.ts")
+	if err != nil {
+		t.Fatalf("SuggestedVerificationPlan failed: %v", err)
+	}
+
+	if len(plan.Fast) == 0 || plan.Fast[0] != "npm run test:unit -- web/session.test.ts" {
+		t.Fatalf("expected repo-specific fast JS verification, got %#v", plan)
+	}
+	if len(plan.Safe) == 0 || plan.Safe[0] != "npm run test:unit" {
+		t.Fatalf("expected repo-specific safe JS verification, got %#v", plan)
+	}
+	foundTypecheck := false
+	for _, command := range plan.Full {
+		if command == "npm run typecheck" {
+			foundTypecheck = true
+		}
+	}
+	if !foundTypecheck {
+		t.Fatalf("expected full JS verification to include typecheck, got %#v", plan)
+	}
+}
