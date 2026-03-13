@@ -17,8 +17,16 @@ type StructuralLink struct {
 	Reason string `json:"reason"`
 }
 
+type VerificationPlan struct {
+	Fast []string `json:"fast"`
+	Safe []string `json:"safe"`
+	Full []string `json:"full"`
+}
+
 var goSymbolRegex = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+var goImportRegex = regexp.MustCompile(`(?m)^\s*(?:"([^"]+)"|import\s+"([^"]+)")`)
 var jsImportRegex = regexp.MustCompile(`(?m)(?:import|export)[^'"\n]*from\s+['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)`)
+var pyImportRegex = regexp.MustCompile(`(?m)^\s*(?:from\s+([.\w]+)\s+import|import\s+([.\w]+))`)
 
 func StructuralLinks(store *db.Store, targetPath string, limit int) ([]StructuralLink, error) {
 	normalized, err := normalizeRepoPath(store.RepoRoot, targetPath)
@@ -32,6 +40,7 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 	}
 	targetAbs := filepath.Join(store.RepoRoot, filepath.FromSlash(normalized))
 	targetContent, _ := osReadFile(targetAbs)
+	goModulePath := readGoModulePath(store.RepoRoot)
 
 	out := make([]StructuralLink, 0)
 	targetDir := filepath.ToSlash(filepath.Dir(normalized))
@@ -70,11 +79,23 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 				Kind:   "go-symbol",
 				Reason: "Target file references a symbol that matches this Go file's stem.",
 			})
+		case referencesGoImport(normalized, targetContent, candidate, goModulePath):
+			out = append(out, StructuralLink{
+				Path:   candidate,
+				Kind:   "go-import",
+				Reason: "Target file imports this Go package from the same repo.",
+			})
 		case strings.HasSuffix(candidateName, ".go") && strings.HasSuffix(targetName, ".go") && referencesGoFile(candidateContent, targetStem):
 			out = append(out, StructuralLink{
 				Path:   candidate,
 				Kind:   "go-dependent",
 				Reason: "This Go file appears to reference the target file's symbol stem.",
+			})
+		case referencesGoImport(candidate, candidateContent, normalized, goModulePath):
+			out = append(out, StructuralLink{
+				Path:   candidate,
+				Kind:   "go-package-dependent",
+				Reason: "This Go file imports the target package from the same repo.",
 			})
 		case referencesJSImport(normalized, targetContent, candidate):
 			out = append(out, StructuralLink{
@@ -87,6 +108,18 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 				Path:   candidate,
 				Kind:   "js-dependent",
 				Reason: "This JS/TS file imports the target module with a relative path.",
+			})
+		case referencesPyImport(normalized, targetContent, candidate):
+			out = append(out, StructuralLink{
+				Path:   candidate,
+				Kind:   "py-import",
+				Reason: "Target file imports this Python module with a local import path.",
+			})
+		case referencesPyImport(candidate, candidateContent, normalized):
+			out = append(out, StructuralLink{
+				Path:   candidate,
+				Kind:   "py-dependent",
+				Reason: "This Python file imports the target module with a local import path.",
 			})
 		case candidateDir == targetDir && candidateIsTest:
 			out = append(out, StructuralLink{
@@ -107,19 +140,29 @@ func StructuralLinks(store *db.Store, targetPath string, limit int) ([]Structura
 }
 
 func SuggestedTestCommands(store *db.Store, targetPath string, limit int) ([]string, error) {
+	plan, err := SuggestedVerificationPlan(store, targetPath)
+	if err != nil {
+		return nil, err
+	}
+	commands := make([]string, 0, len(plan.Fast)+len(plan.Safe)+len(plan.Full))
+	commands = append(commands, plan.Fast...)
+	commands = append(commands, plan.Safe...)
+	commands = append(commands, plan.Full...)
+	return uniqueStrings(commands, limit), nil
+}
+
+func SuggestedVerificationPlan(store *db.Store, targetPath string) (VerificationPlan, error) {
 	normalized, err := normalizeRepoPath(store.RepoRoot, targetPath)
 	if err != nil {
-		return nil, err
+		return VerificationPlan{}, err
 	}
 
-	tests, err := SuggestedTests(store, normalized, limit)
+	tests, err := SuggestedTests(store, normalized, 8)
 	if err != nil {
-		return nil, err
+		return VerificationPlan{}, err
 	}
 
-	commands := inferredTestCommands(store.RepoRoot, normalized, tests)
-
-	return uniqueStrings(commands, limit), nil
+	return inferredVerificationPlan(store.RepoRoot, normalized, tests), nil
 }
 
 func SuggestedTests(store *db.Store, targetPath string, limit int) ([]string, error) {
@@ -130,7 +173,7 @@ func SuggestedTests(store *db.Store, targetPath string, limit int) ([]string, er
 
 	tests := make([]string, 0, limit)
 	for _, link := range links {
-		if link.Kind != "test-pair" && link.Kind != "same-dir-test" {
+		if !isSuggestedTestLink(link) {
 			continue
 		}
 		if !isTestFile(filepath.Base(link.Path)) {
@@ -276,6 +319,32 @@ func referencesGoFile(content []byte, stem string) bool {
 	return false
 }
 
+func referencesGoImport(sourcePath string, content []byte, candidatePath, modulePath string) bool {
+	if len(content) == 0 || modulePath == "" || !strings.HasSuffix(sourcePath, ".go") || !strings.HasSuffix(candidatePath, ".go") {
+		return false
+	}
+	candidateDir := filepath.ToSlash(filepath.Dir(candidatePath))
+	if candidateDir == "." {
+		candidateDir = ""
+	}
+	for _, match := range goImportRegex.FindAllStringSubmatch(string(content), -1) {
+		if len(match) < 3 {
+			continue
+		}
+		importPath := strings.TrimSpace(match[1])
+		if importPath == "" {
+			importPath = strings.TrimSpace(match[2])
+		}
+		if importPath == modulePath && candidateDir == "" {
+			return true
+		}
+		if candidateDir != "" && importPath == modulePath+"/"+candidateDir {
+			return true
+		}
+	}
+	return false
+}
+
 func referencesJSImport(sourcePath string, content []byte, candidatePath string) bool {
 	if len(content) == 0 || !isJSImportFile(sourcePath) || !isJSImportFile(candidatePath) {
 		return false
@@ -293,6 +362,30 @@ func referencesJSImport(sourcePath string, content []byte, candidatePath string)
 			continue
 		}
 		for _, resolved := range resolveJSImportCandidates(sourceDir, spec) {
+			if resolved == candidatePath {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func referencesPyImport(sourcePath string, content []byte, candidatePath string) bool {
+	if len(content) == 0 || !isPythonFile(sourcePath) || !isPythonFile(candidatePath) {
+		return false
+	}
+	sourceDir := filepath.ToSlash(filepath.Dir(sourcePath))
+	for _, match := range pyImportRegex.FindAllStringSubmatch(string(content), -1) {
+		spec := ""
+		if len(match) > 1 && match[1] != "" {
+			spec = match[1]
+		} else if len(match) > 2 {
+			spec = match[2]
+		}
+		if spec == "" {
+			continue
+		}
+		for _, resolved := range resolvePyImportCandidates(sourceDir, spec) {
 			if resolved == candidatePath {
 				return true
 			}
@@ -324,6 +417,19 @@ func isJSImportFile(path string) bool {
 		strings.HasSuffix(path, ".tsx")
 }
 
+func isPythonFile(path string) bool {
+	return strings.HasSuffix(path, ".py")
+}
+
+func isSuggestedTestLink(link StructuralLink) bool {
+	switch link.Kind {
+	case "test-pair", "same-dir-test", "js-dependent", "py-dependent", "go-package-dependent":
+		return true
+	default:
+		return false
+	}
+}
+
 func hasGoTests(paths []string) bool {
 	for _, path := range paths {
 		if strings.HasSuffix(path, "_test.go") {
@@ -337,18 +443,26 @@ func osReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-func inferredTestCommands(repoRoot, normalized string, tests []string) []string {
-	commands := make([]string, 0, 3)
+func inferredVerificationPlan(repoRoot, normalized string, tests []string) VerificationPlan {
+	plan := VerificationPlan{}
 
 	if strings.HasSuffix(normalized, ".go") || hasGoTests(tests) {
 		packageDir := filepath.ToSlash(filepath.Dir(normalized))
 		if packageDir == "." {
-			commands = append(commands, "go test .")
+			plan.Fast = append(plan.Fast, "go test .")
+			plan.Safe = append(plan.Safe, "go test .")
 		} else {
-			commands = append(commands, "go test ./"+packageDir)
+			packageCmd := "go test ./" + packageDir
+			plan.Fast = append(plan.Fast, packageCmd)
+			plan.Safe = append(plan.Safe, packageCmd)
 		}
-		commands = append(commands, "go test ./...")
-		return commands
+		plan.Full = append(plan.Full, "go test ./...")
+		return normalizeVerificationPlan(plan)
+	}
+
+	if strings.HasSuffix(normalized, ".go") {
+		plan.Full = append(plan.Full, "go test ./...")
+		return normalizeVerificationPlan(plan)
 	}
 
 	jsTest := firstMatchingPath(tests, func(path string) bool {
@@ -362,28 +476,52 @@ func inferredTestCommands(repoRoot, normalized string, tests []string) []string 
 	if jsTest != "" {
 		packageManager := inferPackageManager(repoRoot)
 		if packageManager != "" {
-			commands = append(commands, packageManager+" test -- "+jsTest)
-			commands = append(commands, packageManager+" test")
+			plan.Fast = append(plan.Fast, packageManager+" test -- "+jsTest)
+			plan.Safe = append(plan.Safe, packageManager+" test")
+			plan.Full = append(plan.Full, inferJSTieredFullCheck(repoRoot, packageManager)...)
 		}
-		return commands
+		return normalizeVerificationPlan(plan)
+	}
+	if isJSImportFile(normalized) {
+		packageManager := inferPackageManager(repoRoot)
+		if packageManager != "" {
+			plan.Safe = append(plan.Safe, packageManager+" test")
+			plan.Full = append(plan.Full, inferJSTieredFullCheck(repoRoot, packageManager)...)
+		}
+		return normalizeVerificationPlan(plan)
 	}
 
 	pyTest := firstMatchingPath(tests, func(path string) bool {
 		return strings.HasSuffix(path, "_test.py") || strings.HasPrefix(filepath.Base(path), "test_")
 	})
 	if pyTest != "" {
-		commands = append(commands, "pytest "+pyTest, "pytest")
-		return commands
+		plan.Fast = append(plan.Fast, "pytest "+pyTest)
+		plan.Safe = append(plan.Safe, inferPySafeCommand(pyTest))
+		plan.Full = append(plan.Full, "pytest")
+		return normalizeVerificationPlan(plan)
+	}
+	if isPythonFile(normalized) {
+		plan.Safe = append(plan.Safe, "pytest")
+		plan.Full = append(plan.Full, "pytest")
+		return normalizeVerificationPlan(plan)
 	}
 
 	rubyTest := firstMatchingPath(tests, func(path string) bool {
 		return strings.HasSuffix(path, "_spec.rb")
 	})
 	if rubyTest != "" {
-		commands = append(commands, "bundle exec rspec "+rubyTest, "bundle exec rspec")
+		plan.Fast = append(plan.Fast, "bundle exec rspec "+rubyTest)
+		plan.Safe = append(plan.Safe, inferRubySafeCommand(rubyTest))
+		plan.Full = append(plan.Full, "bundle exec rspec")
+		return normalizeVerificationPlan(plan)
+	}
+	if strings.HasSuffix(normalized, ".rb") {
+		plan.Safe = append(plan.Safe, "bundle exec rspec")
+		plan.Full = append(plan.Full, "bundle exec rspec")
+		return normalizeVerificationPlan(plan)
 	}
 
-	return commands
+	return normalizeVerificationPlan(plan)
 }
 
 func firstMatchingPath(paths []string, predicate func(string) bool) string {
@@ -408,6 +546,89 @@ func inferPackageManager(repoRoot string) string {
 	default:
 		return ""
 	}
+}
+
+func inferJSTieredFullCheck(repoRoot, packageManager string) []string {
+	commands := []string{packageManager + " test"}
+	if hasPackageScript(repoRoot, "lint") {
+		commands = append(commands, packageManager+" lint")
+	}
+	if hasPackageScript(repoRoot, "build") {
+		commands = append(commands, packageManager+" build")
+	}
+	return commands
+}
+
+func inferPySafeCommand(testPath string) string {
+	dir := filepath.ToSlash(filepath.Dir(testPath))
+	if dir == "." {
+		return "pytest"
+	}
+	return "pytest " + dir
+}
+
+func inferRubySafeCommand(testPath string) string {
+	dir := filepath.ToSlash(filepath.Dir(testPath))
+	if dir == "." {
+		return "bundle exec rspec"
+	}
+	return "bundle exec rspec " + dir
+}
+
+func normalizeVerificationPlan(plan VerificationPlan) VerificationPlan {
+	plan.Fast = uniqueStrings(plan.Fast, 0)
+	plan.Safe = uniqueStrings(append(plan.Safe, plan.Fast...), 0)
+	plan.Full = uniqueStrings(append(plan.Full, plan.Safe...), 0)
+	return plan
+}
+
+func hasPackageScript(repoRoot, script string) bool {
+	content, err := os.ReadFile(filepath.Join(repoRoot, "package.json"))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(content), `"`+script+`"`)
+}
+
+func resolvePyImportCandidates(sourceDir, spec string) []string {
+	spec = strings.TrimSpace(spec)
+	candidates := make([]string, 0, 8)
+	if strings.HasPrefix(spec, ".") {
+		trimmed := strings.TrimLeft(spec, ".")
+		parts := []string{}
+		if trimmed != "" {
+			parts = strings.Split(trimmed, ".")
+		}
+		up := len(spec) - len(trimmed)
+		baseDir := sourceDir
+		for i := 1; i < up; i++ {
+			baseDir = filepath.ToSlash(filepath.Dir(baseDir))
+		}
+		candidateBase := baseDir
+		if len(parts) > 0 {
+			candidateBase = filepath.ToSlash(filepath.Join(baseDir, filepath.Join(parts...)))
+		}
+		candidates = append(candidates, candidateBase+".py", filepath.ToSlash(filepath.Join(candidateBase, "__init__.py")))
+		return uniqueStrings(candidates, 0)
+	}
+
+	dotted := strings.ReplaceAll(spec, ".", "/")
+	candidates = append(candidates, dotted+".py", filepath.ToSlash(filepath.Join(dotted, "__init__.py")))
+	return uniqueStrings(candidates, 0)
+}
+
+func readGoModulePath(repoRoot string) string {
+	content, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
 }
 
 func fileExists(path string) bool {

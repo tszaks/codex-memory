@@ -54,6 +54,9 @@ func TestExplain(t *testing.T) {
 	if len(report.TestCommands) == 0 {
 		t.Fatalf("expected explain report test commands")
 	}
+	if len(report.Verification.Fast) == 0 {
+		t.Fatalf("expected explain report verification plan")
+	}
 
 	if report.Confidence.Level == "" {
 		t.Fatalf("expected explain confidence")

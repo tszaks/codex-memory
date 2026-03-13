@@ -38,6 +38,9 @@ func TestSafe(t *testing.T) {
 	if len(report.TestCommands) == 0 {
 		t.Fatalf("expected safe test commands")
 	}
+	if len(report.Verification.Fast) == 0 {
+		t.Fatalf("expected safe verification plan")
+	}
 	if report.Confidence.Level == "" {
 		t.Fatalf("expected safe confidence")
 	}
@@ -72,6 +75,9 @@ func TestPlan(t *testing.T) {
 	if len(report.TestCommands) == 0 {
 		t.Fatalf("expected plan test commands")
 	}
+	if len(report.Verification.Fast) == 0 {
+		t.Fatalf("expected plan verification plan")
+	}
 	if len(report.ActionGuidance.InspectFirst) == 0 {
 		t.Fatalf("expected plan action guidance")
 	}
@@ -102,6 +108,9 @@ func TestReview(t *testing.T) {
 	}
 	if len(report.TestCommands) == 0 {
 		t.Fatalf("expected review test commands")
+	}
+	if len(report.Verification.Fast) == 0 {
+		t.Fatalf("expected review verification plan")
 	}
 	if len(report.ActionGuidance.RunNext) == 0 {
 		t.Fatalf("expected review action guidance")

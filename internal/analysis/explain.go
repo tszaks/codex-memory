@@ -18,6 +18,7 @@ type ExplainReport struct {
 	EditChecklist   []string         `json:"edit_checklist"`
 	SuggestedTests  []string         `json:"suggested_tests"`
 	TestCommands    []string         `json:"test_commands"`
+	Verification    VerificationPlan `json:"verification"`
 	BlastRadius     []string         `json:"blast_radius"`
 	StructuralLinks []StructuralLink `json:"structural_links"`
 	Confidence      Confidence       `json:"confidence"`
@@ -84,8 +85,12 @@ LIMIT 5
 	if err != nil {
 		return ExplainReport{}, err
 	}
+	verification, err := SuggestedVerificationPlan(store, risk.Path)
+	if err != nil {
+		return ExplainReport{}, err
+	}
 	confidence := buildConfidence(true, len(structuralLinks), len(suggestedTests), len(blastRadius))
-	actionGuidance := buildActionGuidance(risk.Path, risk, confidence, structuralLinks, blastRadius, testCommands)
+	actionGuidance := buildActionGuidance(risk.Path, risk, confidence, structuralLinks, blastRadius, verification.Fast)
 
 	return ExplainReport{
 		Path:            risk.Path,
@@ -93,6 +98,7 @@ LIMIT 5
 		EditChecklist:   editChecklist(risk, commits),
 		SuggestedTests:  suggestedTests,
 		TestCommands:    testCommands,
+		Verification:    verification,
 		BlastRadius:     blastRadius,
 		StructuralLinks: structuralLinks,
 		Confidence:      confidence,

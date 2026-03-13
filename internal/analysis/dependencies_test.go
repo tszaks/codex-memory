@@ -36,6 +36,34 @@ func TestStructuralLinksIncludeGoDependencies(t *testing.T) {
 	}
 }
 
+func TestStructuralLinksIncludeGoPackageImports(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	links, err := StructuralLinks(store, "cli/app.go", 20)
+	if err != nil {
+		t.Fatalf("StructuralLinks failed: %v", err)
+	}
+
+	found := false
+	for _, link := range links {
+		if link.Path == "internalpkg/helper/helper.go" && link.Kind == "go-import" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected go import link to internalpkg/helper/helper.go, got %#v", links)
+	}
+}
+
 func TestSuggestedTestCommandsForGoFile(t *testing.T) {
 	repo := indexRepo(t)
 	store, err := index.OpenStore(repo)
@@ -86,6 +114,34 @@ func TestStructuralLinksIncludeJSImports(t *testing.T) {
 	}
 }
 
+func TestStructuralLinksIncludePythonImports(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	links, err := StructuralLinks(store, "pkg/app.py", 10)
+	if err != nil {
+		t.Fatalf("StructuralLinks failed: %v", err)
+	}
+
+	found := false
+	for _, link := range links {
+		if link.Path == "pkg/helper.py" && link.Kind == "py-import" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected python import link to pkg/helper.py, got %#v", links)
+	}
+}
+
 func TestRiskInfersContextForNewFile(t *testing.T) {
 	repo := indexRepo(t)
 	store, err := index.OpenStore(repo)
@@ -123,5 +179,36 @@ func TestRiskInfersContextForNewFile(t *testing.T) {
 	}
 	if len(commands) < 2 || commands[0] != "go test ." {
 		t.Fatalf("expected focused go commands for new file, got %#v", commands)
+	}
+}
+
+func TestSuggestedVerificationPlanForPythonFile(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	plan, err := SuggestedVerificationPlan(store, "pkg/app.py")
+	if err != nil {
+		t.Fatalf("SuggestedVerificationPlan failed: %v", err)
+	}
+
+	if len(plan.Fast) == 0 || plan.Fast[0] != "pytest pkg/test_app.py" {
+		t.Fatalf("expected focused python verification, got %#v", plan)
+	}
+	foundFull := false
+	for _, command := range plan.Full {
+		if command == "pytest" {
+			foundFull = true
+		}
+	}
+	if !foundFull {
+		t.Fatalf("expected full python verification, got %#v", plan)
 	}
 }

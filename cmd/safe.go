@@ -50,6 +50,10 @@ func runSafe(out io.Writer, args []string, jsonOutput bool) error {
 				lines = append(lines, "- "+command)
 			}
 		}
+		if verificationLines := renderVerificationPlan(report.Verification); len(verificationLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, verificationLines...)
+		}
 		if len(report.BlastRadius) > 0 {
 			lines = append(lines, "", "Blast radius:")
 			for _, path := range report.BlastRadius {

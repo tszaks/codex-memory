@@ -41,6 +41,10 @@ func runReview(out io.Writer, args []string, jsonOutput bool) error {
 				lines = append(lines, "- "+command)
 			}
 		}
+		if verificationLines := renderVerificationPlan(report.Verification); len(verificationLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, verificationLines...)
+		}
 		if len(report.ChangedFiles) > 0 {
 			lines = append(lines, "", "Changed files:")
 			for _, file := range report.ChangedFiles {

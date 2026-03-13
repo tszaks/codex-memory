@@ -53,6 +53,10 @@ func runPlan(out io.Writer, args []string, jsonOutput bool) error {
 				lines = append(lines, "- "+command)
 			}
 		}
+		if verificationLines := renderVerificationPlan(report.Verification); len(verificationLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, verificationLines...)
+		}
 		if actionLines := renderActionGuidance(report.ActionGuidance); len(actionLines) > 0 {
 			lines = append(lines, "", "Agent guidance:")
 			lines = append(lines, actionLines...)

@@ -8,6 +8,7 @@ It gives an LLM fast repo context before, during, and after edits:
 - what else is likely to move
 - what tests are most relevant
 - what focused test command to run first, plus the safer fallback
+- what fast, safe, and full verification steps to run
 - what the blast radius probably is
 - what action an agent should take next
 - whether the current task drifted outside its planned scope
@@ -73,13 +74,13 @@ go run . --help
 
 - `explain`: best pre-edit briefing for a file
 - `safe`: tells an agent how cautious it should be, with confidence
-- `plan`: gives a lightweight edit plan plus likely test commands
+- `plan`: gives a lightweight edit plan plus likely test commands and verification tiers
 - `changed-now`: shows the live working tree
 - `review`: reviews branch diff plus working-tree changes with confidence, task drift, and boundary warnings
 - `handoff`: generates a final summary before handoff
 - `task`: stores the current goal and planned scope so drift shows up in review and handoff
 
-It also handles brand-new files better now by inferring likely related files and tests even before they have indexed history, and it adds lightweight JS/TS import signals plus boundary warnings for areas like auth, config, DB, API, payments, and jobs.
+It also handles brand-new files better now by inferring likely related files and tests even before they have indexed history, adds lightweight Go, JS/TS, and Python dependency signals, and surfaces boundary warnings for areas like auth, config, DB, API, payments, and jobs.
 
 ## Example
 

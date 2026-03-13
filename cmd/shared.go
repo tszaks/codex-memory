@@ -65,6 +65,29 @@ func renderActionGuidance(guidance analysis.ActionGuidance) []string {
 	return lines
 }
 
+func renderVerificationPlan(plan analysis.VerificationPlan) []string {
+	lines := make([]string, 0)
+	if len(plan.Fast) > 0 {
+		lines = append(lines, "Fast verification:")
+		for _, item := range plan.Fast {
+			lines = append(lines, "- "+item)
+		}
+	}
+	if len(plan.Safe) > 0 {
+		lines = append(lines, "Safe verification:")
+		for _, item := range plan.Safe {
+			lines = append(lines, "- "+item)
+		}
+	}
+	if len(plan.Full) > 0 {
+		lines = append(lines, "Full verification:")
+		for _, item := range plan.Full {
+			lines = append(lines, "- "+item)
+		}
+	}
+	return lines
+}
+
 func renderTaskScope(task analysis.TaskScopeReport) []string {
 	if task.Goal == "" {
 		return nil

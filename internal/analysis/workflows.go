@@ -9,28 +9,30 @@ import (
 )
 
 type SafeReport struct {
-	Path           string         `json:"path"`
-	Verdict        string         `json:"verdict"`
-	Summary        string         `json:"summary"`
-	RequiredChecks []string       `json:"required_checks"`
-	SuggestedTests []string       `json:"suggested_tests"`
-	TestCommands   []string       `json:"test_commands"`
-	BlastRadius    []string       `json:"blast_radius"`
-	Confidence     Confidence     `json:"confidence"`
-	ActionGuidance ActionGuidance `json:"action_guidance"`
-	Risk           RiskReport     `json:"risk"`
+	Path           string           `json:"path"`
+	Verdict        string           `json:"verdict"`
+	Summary        string           `json:"summary"`
+	RequiredChecks []string         `json:"required_checks"`
+	SuggestedTests []string         `json:"suggested_tests"`
+	TestCommands   []string         `json:"test_commands"`
+	Verification   VerificationPlan `json:"verification"`
+	BlastRadius    []string         `json:"blast_radius"`
+	Confidence     Confidence       `json:"confidence"`
+	ActionGuidance ActionGuidance   `json:"action_guidance"`
+	Risk           RiskReport       `json:"risk"`
 }
 
 type PlanReport struct {
-	Path           string         `json:"path"`
-	Goal           string         `json:"goal"`
-	Steps          []string       `json:"steps"`
-	FilesToInspect []string       `json:"files_to_inspect"`
-	TestsToRun     []string       `json:"tests_to_run"`
-	TestCommands   []string       `json:"test_commands"`
-	Confidence     Confidence     `json:"confidence"`
-	ActionGuidance ActionGuidance `json:"action_guidance"`
-	Risk           RiskReport     `json:"risk"`
+	Path           string           `json:"path"`
+	Goal           string           `json:"goal"`
+	Steps          []string         `json:"steps"`
+	FilesToInspect []string         `json:"files_to_inspect"`
+	TestsToRun     []string         `json:"tests_to_run"`
+	TestCommands   []string         `json:"test_commands"`
+	Verification   VerificationPlan `json:"verification"`
+	Confidence     Confidence       `json:"confidence"`
+	ActionGuidance ActionGuidance   `json:"action_guidance"`
+	Risk           RiskReport       `json:"risk"`
 }
 
 type ReviewedFile struct {
@@ -49,6 +51,7 @@ type ReviewReport struct {
 	ChangedFiles     []ReviewedFile    `json:"changed_files"`
 	RequiredTests    []string          `json:"required_tests"`
 	TestCommands     []string          `json:"test_commands"`
+	Verification     VerificationPlan  `json:"verification"`
 	Confidence       Confidence        `json:"confidence"`
 	ActionGuidance   ActionGuidance    `json:"action_guidance"`
 	Task             TaskScopeReport   `json:"task"`
@@ -95,6 +98,10 @@ func Safe(store *db.Store, targetPath string) (SafeReport, error) {
 	if err != nil {
 		return SafeReport{}, err
 	}
+	verification, err := SuggestedVerificationPlan(store, targetPath)
+	if err != nil {
+		return SafeReport{}, err
+	}
 	structuralLinks, err := StructuralLinks(store, targetPath, 6)
 	if err != nil {
 		return SafeReport{}, err
@@ -121,6 +128,8 @@ func Safe(store *db.Store, targetPath string) (SafeReport, error) {
 		checks = append(checks, fmt.Sprintf("Run focused tests after editing: %s.", strings.Join(tests, ", ")))
 	}
 
+	confidence := buildConfidence(true, len(structuralLinks), len(tests), len(blastRadius))
+
 	return SafeReport{
 		Path:           risk.Path,
 		Verdict:        verdict,
@@ -128,9 +137,10 @@ func Safe(store *db.Store, targetPath string) (SafeReport, error) {
 		RequiredChecks: checks,
 		SuggestedTests: tests,
 		TestCommands:   testCommands,
+		Verification:   verification,
 		BlastRadius:    blastRadius,
-		Confidence:     buildConfidence(true, len(structuralLinks), len(tests), len(blastRadius)),
-		ActionGuidance: buildActionGuidance(risk.Path, risk, buildConfidence(true, len(structuralLinks), len(tests), len(blastRadius)), structuralLinks, blastRadius, testCommands),
+		Confidence:     confidence,
+		ActionGuidance: buildActionGuidance(risk.Path, risk, confidence, structuralLinks, blastRadius, verification.Fast),
 		Risk:           risk,
 	}, nil
 }
@@ -157,6 +167,7 @@ func Plan(store *db.Store, targetPath string) (PlanReport, error) {
 		FilesToInspect: filesToInspect,
 		TestsToRun:     safe.SuggestedTests,
 		TestCommands:   safe.TestCommands,
+		Verification:   safe.Verification,
 		Confidence:     safe.Confidence,
 		ActionGuidance: safe.ActionGuidance,
 		Risk:           safe.Risk,
@@ -196,6 +207,9 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 	reviewed := make([]ReviewedFile, 0, len(changed))
 	requiredTests := make([]string, 0)
 	testCommands := make([]string, 0)
+	reviewFast := make([]string, 0)
+	reviewSafe := make([]string, 0)
+	reviewFull := make([]string, 0)
 	notes := make([]string, 0)
 	allBoundaries := make([]BoundaryWarning, 0)
 	highRiskCount := 0
@@ -222,6 +236,10 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		if err != nil {
 			return ReviewReport{}, err
 		}
+		verification, err := SuggestedVerificationPlan(store, path)
+		if err != nil {
+			return ReviewReport{}, err
+		}
 		blastRadius, err := BlastRadius(store, path, 4)
 		if err != nil {
 			return ReviewReport{}, err
@@ -233,6 +251,9 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 
 		requiredTests = append(requiredTests, tests...)
 		testCommands = append(testCommands, commands...)
+		reviewFast = append(reviewFast, verification.Fast...)
+		reviewSafe = append(reviewSafe, verification.Safe...)
+		reviewFull = append(reviewFull, verification.Full...)
 		allBoundaries = append(allBoundaries, detectBoundaryWarnings(append([]string{path}, blastRadius...))...)
 		reviewed = append(reviewed, ReviewedFile{
 			Path:           path,
@@ -249,7 +270,12 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		return ReviewReport{}, err
 	}
 	confidence := buildConfidence(len(reviewed) > 0, 1, len(requiredTests), len(reviewed))
-	actionGuidance := buildActionGuidance("working-tree", RiskReport{Level: "medium"}, confidence, nil, pathsFromReviewed(reviewed), uniqueStrings(testCommands, 5))
+	verification := VerificationPlan{
+		Fast: uniqueStrings(reviewFast, 5),
+		Safe: uniqueStrings(reviewSafe, 6),
+		Full: uniqueStrings(reviewFull, 6),
+	}
+	actionGuidance := buildActionGuidance("working-tree", RiskReport{Level: "medium"}, confidence, nil, pathsFromReviewed(reviewed), verification.Fast)
 	if task.HasScopeDrift {
 		notes = append(notes, fmt.Sprintf("Active task drifted outside planned scope: %s.", strings.Join(task.OutOfScopeChanged, ", ")))
 		actionGuidance.AskForReviewIf = uniqueStrings(append(actionGuidance.AskForReviewIf, "the change drifted outside the active task scope"), 5)
@@ -267,6 +293,7 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		ChangedFiles:     reviewed,
 		RequiredTests:    uniqueStrings(requiredTests, 10),
 		TestCommands:     uniqueStrings(testCommands, 5),
+		Verification:     verification,
 		Confidence:       confidence,
 		ActionGuidance:   actionGuidance,
 		Task:             task,
