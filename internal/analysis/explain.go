@@ -14,6 +14,8 @@ type CommitSummary struct {
 
 type ExplainReport struct {
 	Path          string          `json:"path"`
+	Summary       string          `json:"summary"`
+	EditChecklist []string        `json:"edit_checklist"`
 	Risk          RiskReport      `json:"risk"`
 	RecentCommits []CommitSummary `json:"recent_commits"`
 	Decisions     []Decision      `json:"decisions"`
@@ -63,9 +65,48 @@ LIMIT 5
 
 	return ExplainReport{
 		Path:          risk.Path,
+		Summary:       explainSummary(risk, commits, decisions),
+		EditChecklist: editChecklist(risk, commits),
 		Risk:          risk,
 		RecentCommits: commits,
 		Decisions:     decisions,
 		Neighbors:     risk.TopNeighbors,
 	}, nil
+}
+
+func explainSummary(risk RiskReport, commits []CommitSummary, decisions []Decision) string {
+	switch risk.Level {
+	case "high":
+		return "High-risk file. Check recent commits and related files before making changes."
+	case "medium":
+		return "Medium-risk file. A quick scan of recent history and neighbors will lower surprise regressions."
+	default:
+		if len(decisions) > 0 {
+			return "Lower-risk file, but there is some history worth reading before you edit."
+		}
+		return "Lower-risk file with limited recent churn."
+	}
+}
+
+func editChecklist(risk RiskReport, commits []CommitSummary) []string {
+	checklist := make([]string, 0, 4)
+
+	if len(risk.TopNeighbors) > 0 {
+		checklist = append(checklist, fmt.Sprintf("Review related file %s before editing alone.", risk.TopNeighbors[0].Path))
+	}
+	if len(commits) > 0 {
+		checklist = append(checklist, fmt.Sprintf("Read the latest commit touching this file: %s.", commits[0].SHA[:8]))
+	}
+	if risk.AuthorCount >= 2 {
+		checklist = append(checklist, "Expect shared ownership context because multiple authors have touched this file.")
+	}
+	if risk.RecentTouchCount >= 2 {
+		checklist = append(checklist, "Double-check nearby work because this file changed several times recently.")
+	}
+
+	if len(checklist) == 0 {
+		checklist = append(checklist, "This file looks isolated enough to change with a normal review pass.")
+	}
+
+	return checklist
 }

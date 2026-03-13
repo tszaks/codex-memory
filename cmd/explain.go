@@ -30,11 +30,23 @@ func runExplain(out io.Writer, args []string, jsonOutput bool) error {
 		lines := []string{
 			fmt.Sprintf("Path: %s", report.Path),
 			fmt.Sprintf("Risk: %s (%d)", report.Risk.Level, report.Risk.Score),
+			fmt.Sprintf("Summary: %s", report.Summary),
+			"",
+			"Before you edit:",
+		}
+		for _, item := range report.EditChecklist {
+			lines = append(lines, "- "+item)
+		}
+		lines = append(lines,
 			"",
 			"Recent commits:",
-		}
+		)
 		for _, commit := range report.RecentCommits {
 			lines = append(lines, fmt.Sprintf("- %s %s", commit.SHA[:8], commit.Subject))
+		}
+		lines = append(lines, "", "Why it matters:")
+		for _, reason := range report.Risk.Reasons {
+			lines = append(lines, "- "+reason)
 		}
 		lines = append(lines, "", renderNeighbors(report.Neighbors))
 		if len(report.Decisions) > 0 {

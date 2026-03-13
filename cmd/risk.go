@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/tszaks/codex-memory/internal/analysis"
 	"github.com/tszaks/codex-memory/internal/output"
@@ -26,13 +27,23 @@ func runRisk(out io.Writer, args []string, jsonOutput bool) error {
 	}
 
 	return output.Write(out, report, jsonOutput, func() string {
-		return fmt.Sprintf("%s\nRisk: %s (%d)\nChurn: %d\nRecent touches: %d\nNeighbors: %d",
+		lines := []string{
 			report.Path,
-			report.Level,
-			report.Score,
-			report.ChurnScore,
-			report.RecentTouchCount,
-			report.NeighborCount,
-		)
+			fmt.Sprintf("Risk: %s (%d)", report.Level, report.Score),
+			fmt.Sprintf("Churn: %d", report.ChurnScore),
+			fmt.Sprintf("Recent touches: %d", report.RecentTouchCount),
+			fmt.Sprintf("Authors: %d", report.AuthorCount),
+			fmt.Sprintf("Neighbors: %d", report.NeighborCount),
+		}
+		if report.LastTouchedAt != "" {
+			lines = append(lines, fmt.Sprintf("Last touched: %s", report.LastTouchedAt))
+		}
+		if len(report.Reasons) > 0 {
+			lines = append(lines, "", "Why it matters:")
+			for _, reason := range report.Reasons {
+				lines = append(lines, "- "+reason)
+			}
+		}
+		return strings.Join(lines, "\n")
 	})
 }

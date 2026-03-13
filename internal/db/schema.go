@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS files (
   extension TEXT NOT NULL,
   churn_score INTEGER NOT NULL DEFAULT 0,
   recent_touch_count INTEGER NOT NULL DEFAULT 0,
+  author_count INTEGER NOT NULL DEFAULT 0,
+  last_touched_at TEXT NOT NULL DEFAULT '',
   exists_on_disk INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (repo_id, path)
 );

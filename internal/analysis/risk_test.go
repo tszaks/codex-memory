@@ -26,4 +26,16 @@ func TestRisk(t *testing.T) {
 	if report.Score <= 0 {
 		t.Fatalf("expected positive risk score, got %+v", report)
 	}
+
+	if report.AuthorCount < 2 {
+		t.Fatalf("expected author count to be indexed, got %+v", report)
+	}
+
+	if report.LastTouchedAt == "" {
+		t.Fatalf("expected last touched timestamp in risk report")
+	}
+
+	if len(report.Reasons) == 0 {
+		t.Fatalf("expected risk report to explain why this file matters")
+	}
 }

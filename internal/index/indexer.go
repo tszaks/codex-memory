@@ -56,6 +56,8 @@ func (i *Indexer) Run() (Result, error) {
 
 	churn := make(map[string]int)
 	recent := make(map[string]int)
+	authors := make(map[string]map[string]struct{})
+	lastTouched := make(map[string]time.Time)
 	threshold := indexedAt.AddDate(0, 0, -30)
 	edges := make(map[string]db.CochangeEdge)
 
@@ -86,6 +88,13 @@ func (i *Indexer) Run() (Result, error) {
 			churn[filePath]++
 			if commit.CommittedAt.After(threshold) {
 				recent[filePath]++
+			}
+			if authors[filePath] == nil {
+				authors[filePath] = make(map[string]struct{})
+			}
+			authors[filePath][commit.AuthorEmail] = struct{}{}
+			if commit.CommittedAt.After(lastTouched[filePath]) {
+				lastTouched[filePath] = commit.CommittedAt
 			}
 
 			if err := i.Store.InsertFileCommit(repo.ID, filePath, commit.SHA, commit.CommittedAt); err != nil {
@@ -125,6 +134,8 @@ func (i *Indexer) Run() (Result, error) {
 			Extension:        strings.TrimPrefix(filepath.Ext(filePath), "."),
 			ChurnScore:       churnScore,
 			RecentTouchCount: recent[filePath],
+			AuthorCount:      len(authors[filePath]),
+			LastTouchedAt:    lastTouched[filePath],
 			ExistsOnDisk:     exists,
 		}); err != nil {
 			return Result{}, err

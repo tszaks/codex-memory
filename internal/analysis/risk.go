@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tszaks/codex-memory/internal/db"
 )
@@ -13,6 +14,9 @@ type RiskReport struct {
 	ChurnScore       int        `json:"churn_score"`
 	RecentTouchCount int        `json:"recent_touch_count"`
 	NeighborCount    int        `json:"neighbor_count"`
+	AuthorCount      int        `json:"author_count"`
+	LastTouchedAt    string     `json:"last_touched_at"`
+	Reasons          []string   `json:"reasons"`
 	TopNeighbors     []Neighbor `json:"top_neighbors"`
 }
 
@@ -28,12 +32,14 @@ func Risk(store *db.Store, targetPath string) (RiskReport, error) {
 
 	row := store.DB().QueryRow(`
 SELECT churn_score, recent_touch_count
+     , author_count, last_touched_at
 FROM files
 WHERE repo_id = ? AND path = ?
 `, repo.ID, normalized)
 
-	var churnScore, recentTouchCount int
-	if err := row.Scan(&churnScore, &recentTouchCount); err != nil {
+	var churnScore, recentTouchCount, authorCount int
+	var lastTouchedAt string
+	if err := row.Scan(&churnScore, &recentTouchCount, &authorCount, &lastTouchedAt); err != nil {
 		return RiskReport{}, fmt.Errorf("read file risk data: %w", err)
 	}
 
@@ -47,12 +53,18 @@ WHERE repo_id = ? AND path = ?
 		return RiskReport{}, err
 	}
 
-	score := churnScore + (recentTouchCount * 3) + min(neighborCount, 10)*2
+	score := churnScore + (recentTouchCount * 3) + min(neighborCount, 10)*2 + min(authorCount, 5)
+	lastTouched, _ := time.Parse(time.RFC3339, lastTouchedAt)
+	if !lastTouched.IsZero() && time.Since(lastTouched) <= 14*24*time.Hour {
+		score += 2
+	}
+
+	reasons := riskReasons(churnScore, recentTouchCount, neighborCount, authorCount, lastTouched)
 	level := "low"
 	switch {
-	case score >= 18:
+	case score >= 20:
 		level = "high"
-	case score >= 8:
+	case score >= 10:
 		level = "medium"
 	}
 
@@ -63,8 +75,40 @@ WHERE repo_id = ? AND path = ?
 		ChurnScore:       churnScore,
 		RecentTouchCount: recentTouchCount,
 		NeighborCount:    neighborCount,
+		AuthorCount:      authorCount,
+		LastTouchedAt:    lastTouchedAt,
+		Reasons:          reasons,
 		TopNeighbors:     neighbors,
 	}, nil
+}
+
+func riskReasons(churnScore, recentTouchCount, neighborCount, authorCount int, lastTouched time.Time) []string {
+	reasons := make([]string, 0, 4)
+
+	switch {
+	case recentTouchCount >= 2:
+		reasons = append(reasons, "This file changed repeatedly in the last 30 days.")
+	case churnScore >= 3:
+		reasons = append(reasons, "This file has a higher-than-usual change history.")
+	}
+
+	if neighborCount >= 2 {
+		reasons = append(reasons, "Changes here often fan out into other files.")
+	}
+
+	if authorCount >= 2 {
+		reasons = append(reasons, "More than one author has touched this file, so shared context matters.")
+	}
+
+	if !lastTouched.IsZero() && time.Since(lastTouched) <= 14*24*time.Hour {
+		reasons = append(reasons, "This file was touched recently, so nearby work may still be in motion.")
+	}
+
+	if len(reasons) == 0 {
+		reasons = append(reasons, "This file looks relatively stable based on current history.")
+	}
+
+	return reasons
 }
 
 func min(a, b int) int {

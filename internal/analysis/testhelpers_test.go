@@ -23,6 +23,8 @@ func indexRepoHelper(t *testing.T) string {
 	run(t, repo, "git", "add", ".")
 	run(t, repo, "git", "commit", "-m", "feat: add app")
 
+	run(t, repo, "git", "config", "user.name", "Pairing User")
+	run(t, repo, "git", "config", "user.email", "pairing@example.com")
 	writeFile(t, filepath.Join(repo, "main.go"), "package main\n\nfunc main() {}\n")
 	writeFile(t, filepath.Join(repo, "config.yaml"), "key: next\n")
 	run(t, repo, "git", "add", ".")

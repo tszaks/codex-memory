@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ type Store struct {
 	conn     *sql.DB
 	RepoRoot string
 }
+
+var ErrRepoNotIndexed = errors.New("repo has not been indexed yet")
 
 type RepoRecord struct {
 	ID                int64
@@ -28,6 +31,8 @@ type FileStat struct {
 	Extension        string
 	ChurnScore       int
 	RecentTouchCount int
+	AuthorCount      int
+	LastTouchedAt    time.Time
 	ExistsOnDisk     bool
 }
 
@@ -96,7 +101,59 @@ func (s *Store) Init() error {
 	if _, err := s.conn.Exec(schema); err != nil {
 		return fmt.Errorf("initialize schema: %w", err)
 	}
+	if err := s.migrate(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *Store) migrate() error {
+	fileColumns := map[string]string{
+		"author_count":    "ALTER TABLE files ADD COLUMN author_count INTEGER NOT NULL DEFAULT 0",
+		"last_touched_at": "ALTER TABLE files ADD COLUMN last_touched_at TEXT NOT NULL DEFAULT ''",
+	}
+
+	existing, err := s.tableColumns("files")
+	if err != nil {
+		return fmt.Errorf("read files columns: %w", err)
+	}
+
+	for column, statement := range fileColumns {
+		if _, ok := existing[column]; ok {
+			continue
+		}
+		if _, err := s.conn.Exec(statement); err != nil {
+			return fmt.Errorf("add files.%s column: %w", column, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) tableColumns(table string) (map[string]struct{}, error) {
+	rows, err := s.conn.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal sql.NullString
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
+			return nil, err
+		}
+		columns[name] = struct{}{}
+	}
+
+	return columns, rows.Err()
 }
 
 func (s *Store) Close() error {
@@ -127,6 +184,9 @@ func (s *Store) Repo() (RepoRecord, error) {
 	var repo RepoRecord
 	var indexedAt string
 	if err := row.Scan(&repo.ID, &repo.Root, &repo.Branch, &repo.LastIndexedCommit, &indexedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return RepoRecord{}, fmt.Errorf("%w: run `codex-memory index` first", ErrRepoNotIndexed)
+		}
 		return RepoRecord{}, fmt.Errorf("read repo: %w", err)
 	}
 	repo.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
@@ -170,10 +230,14 @@ func (s *Store) UpsertFile(repoID int64, stat FileStat) error {
 	if stat.ExistsOnDisk {
 		exists = 1
 	}
+	lastTouchedAt := ""
+	if !stat.LastTouchedAt.IsZero() {
+		lastTouchedAt = stat.LastTouchedAt.UTC().Format(time.RFC3339)
+	}
 	_, err := s.conn.Exec(`
-INSERT OR REPLACE INTO files (repo_id, path, extension, churn_score, recent_touch_count, exists_on_disk)
-VALUES (?, ?, ?, ?, ?, ?)
-`, repoID, stat.Path, stat.Extension, stat.ChurnScore, stat.RecentTouchCount, exists)
+INSERT OR REPLACE INTO files (repo_id, path, extension, churn_score, recent_touch_count, author_count, last_touched_at, exists_on_disk)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`, repoID, stat.Path, stat.Extension, stat.ChurnScore, stat.RecentTouchCount, stat.AuthorCount, lastTouchedAt, exists)
 	if err != nil {
 		return fmt.Errorf("upsert file %s: %w", stat.Path, err)
 	}

@@ -30,4 +30,12 @@ func TestExplain(t *testing.T) {
 	if len(report.Decisions) == 0 {
 		t.Fatalf("expected decision notes in explain report")
 	}
+
+	if report.Summary == "" {
+		t.Fatalf("expected explain report summary")
+	}
+
+	if len(report.EditChecklist) == 0 {
+		t.Fatalf("expected explain report checklist")
+	}
 }
