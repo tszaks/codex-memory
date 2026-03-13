@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/tszaks/codex-memory/internal/db"
@@ -42,6 +43,9 @@ type ReviewedFile struct {
 	TopReasons     []string `json:"top_reasons"`
 	SuggestedTests []string `json:"suggested_tests"`
 	BlastRadius    []string `json:"blast_radius"`
+	BoundaryLabels []string `json:"boundary_labels,omitempty"`
+	NeedsReview    bool     `json:"needs_review"`
+	NeedsTests     bool     `json:"needs_tests"`
 }
 
 type ReviewReport struct {
@@ -225,6 +229,8 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 				TopReasons:     []string{"This file is new or outside indexed history, so risk is unknown."},
 				SuggestedTests: []string{},
 				BlastRadius:    []string{},
+				NeedsReview:    true,
+				NeedsTests:     true,
 			})
 			continue
 		}
@@ -248,13 +254,18 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		if risk.Level == "high" {
 			highRiskCount++
 		}
+		boundaries := detectBoundaryWarnings(append([]string{path}, blastRadius...))
+		boundaryLabels := make([]string, 0, len(boundaries))
+		for _, boundary := range boundaries {
+			boundaryLabels = append(boundaryLabels, boundary.Label)
+		}
 
 		requiredTests = append(requiredTests, tests...)
 		testCommands = append(testCommands, commands...)
 		reviewFast = append(reviewFast, verification.Fast...)
 		reviewSafe = append(reviewSafe, verification.Safe...)
 		reviewFull = append(reviewFull, verification.Full...)
-		allBoundaries = append(allBoundaries, detectBoundaryWarnings(append([]string{path}, blastRadius...))...)
+		allBoundaries = append(allBoundaries, boundaries...)
 		reviewed = append(reviewed, ReviewedFile{
 			Path:           path,
 			ChangeSource:   changeSources[path],
@@ -262,6 +273,9 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 			TopReasons:     risk.Reasons,
 			SuggestedTests: tests,
 			BlastRadius:    blastRadius,
+			BoundaryLabels: boundaryLabels,
+			NeedsReview:    risk.Level == "high" || len(boundaries) > 0 || len(blastRadius) >= 4,
+			NeedsTests:     len(commands) > 0,
 		})
 	}
 
@@ -286,12 +300,21 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		actionGuidance.StopSignals = uniqueStrings(append(actionGuidance.StopSignals, fmt.Sprintf("%d high-risk changed file(s) need extra review before handoff.", highRiskCount)), 5)
 		actionGuidance.MustReview = true
 	}
+	if len(uniqueBoundaryWarnings(allBoundaries)) > 1 {
+		actionGuidance.StopSignals = uniqueStrings(append(actionGuidance.StopSignals, "Multiple sensitive boundaries changed together: slow down and review the full flow."), 5)
+		actionGuidance.MustReview = true
+	}
+	if len(reviewFast) == 0 {
+		actionGuidance.StopSignals = uniqueStrings(append(actionGuidance.StopSignals, "No focused verification command was inferred for this review: pick a manual verification plan before handoff."), 5)
+		actionGuidance.MustVerify = true
+	}
 	if len(reviewFast) > 0 || len(reviewSafe) > 0 || len(reviewFull) > 0 {
 		actionGuidance.MustVerify = true
 	}
 	if actionGuidance.RecommendedNextCommand == "" && len(verification.Fast) > 0 {
 		actionGuidance.RecommendedNextCommand = verification.Fast[0]
 	}
+	sortReviewedFiles(reviewed, task)
 
 	summary := fmt.Sprintf("Review %d changed files before handing this branch back to an agent.", len(changed))
 	if highRiskCount > 0 {
@@ -429,4 +452,44 @@ func uniqueBoundaryWarnings(values []BoundaryWarning) []BoundaryWarning {
 		out = append(out, value)
 	}
 	return out
+}
+
+func sortReviewedFiles(files []ReviewedFile, task TaskScopeReport) {
+	outOfScope := make(map[string]struct{}, len(task.OutOfScopeChanged))
+	for _, path := range task.OutOfScopeChanged {
+		outOfScope[path] = struct{}{}
+	}
+
+	sort.SliceStable(files, func(i, j int) bool {
+		left := reviewPriority(files[i], outOfScope)
+		right := reviewPriority(files[j], outOfScope)
+		if left != right {
+			return left > right
+		}
+		return files[i].Path < files[j].Path
+	})
+}
+
+func reviewPriority(file ReviewedFile, outOfScope map[string]struct{}) int {
+	score := 0
+	if _, ok := outOfScope[file.Path]; ok {
+		score += 100
+	}
+	switch file.RiskLevel {
+	case "high":
+		score += 50
+	case "medium":
+		score += 25
+	case "unknown":
+		score += 20
+	}
+	score += len(file.BoundaryLabels) * 15
+	if file.NeedsReview {
+		score += 10
+	}
+	if !file.NeedsTests {
+		score += 8
+	}
+	score += min(len(file.BlastRadius), 5)
+	return score
 }

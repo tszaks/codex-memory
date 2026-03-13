@@ -130,6 +130,9 @@ func TestReview(t *testing.T) {
 	if !report.ActionGuidance.MustVerify {
 		t.Fatalf("expected review to require verification")
 	}
+	if len(report.ChangedFiles[0].BoundaryLabels) == 0 && report.ChangedFiles[0].RiskLevel == "low" {
+		t.Fatalf("expected prioritized review output, got %#v", report.ChangedFiles)
+	}
 }
 
 func TestReviewIncludesWorkingTreeChanges(t *testing.T) {
@@ -255,5 +258,51 @@ func TestReviewDetectsTaskScopeDrift(t *testing.T) {
 	}
 	if len(report.ActionGuidance.StopSignals) == 0 {
 		t.Fatalf("expected scope drift stop signals")
+	}
+	if len(report.ChangedFiles) < 3 {
+		t.Fatalf("expected prioritized changed files, got %#v", report.ChangedFiles)
+	}
+	found := false
+	for _, file := range report.ChangedFiles[:3] {
+		if file.Path == "config.yaml" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected out-of-scope config drift near the top of review priorities, got %#v", report.ChangedFiles)
+	}
+}
+
+func TestReviewPrioritizesSensitiveFilesFirst(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	report, err := Review(store, "HEAD~1")
+	if err != nil {
+		t.Fatalf("Review failed: %v", err)
+	}
+
+	if len(report.ChangedFiles) < 2 {
+		t.Fatalf("expected multiple changed files, got %#v", report.ChangedFiles)
+	}
+	topTier := report.ChangedFiles[:3]
+	found := false
+	for _, file := range topTier {
+		if file.Path == "config.yaml" && len(file.BoundaryLabels) > 0 && file.NeedsReview {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected config.yaml to stay in the top review tier with boundary labels, got %#v", report.ChangedFiles)
 	}
 }

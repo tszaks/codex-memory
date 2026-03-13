@@ -76,7 +76,7 @@ go run . --help
 - `safe`: tells an agent how cautious it should be, with confidence
 - `plan`: gives a lightweight edit plan plus likely test commands and verification tiers
 - `changed-now`: shows the live working tree
-- `review`: reviews branch diff plus working-tree changes with confidence, task drift, and boundary warnings
+- `review`: reviews branch diff plus working-tree changes with confidence, task drift, boundary warnings, and the riskiest files first
 - `handoff`: generates a final summary before handoff
 - `task`: stores the current goal and planned scope so drift shows up in review and handoff
 

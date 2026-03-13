@@ -49,6 +49,11 @@ func runReview(out io.Writer, args []string, jsonOutput bool) error {
 			lines = append(lines, "", "Changed files:")
 			for _, file := range report.ChangedFiles {
 				lines = append(lines, fmt.Sprintf("- %s (%s, %s)", file.Path, file.RiskLevel, file.ChangeSource))
+				if len(file.BoundaryLabels) > 0 {
+					lines = append(lines, "  boundaries: "+strings.Join(file.BoundaryLabels, ", "))
+				}
+				lines = append(lines, fmt.Sprintf("  needs review: %t", file.NeedsReview))
+				lines = append(lines, fmt.Sprintf("  needs tests: %t", file.NeedsTests))
 				for _, reason := range file.TopReasons {
 					lines = append(lines, "  reason: "+reason)
 				}
