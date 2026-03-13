@@ -13,13 +13,16 @@ type CommitSummary struct {
 }
 
 type ExplainReport struct {
-	Path          string          `json:"path"`
-	Summary       string          `json:"summary"`
-	EditChecklist []string        `json:"edit_checklist"`
-	Risk          RiskReport      `json:"risk"`
-	RecentCommits []CommitSummary `json:"recent_commits"`
-	Decisions     []Decision      `json:"decisions"`
-	Neighbors     []Neighbor      `json:"neighbors"`
+	Path            string           `json:"path"`
+	Summary         string           `json:"summary"`
+	EditChecklist   []string         `json:"edit_checklist"`
+	SuggestedTests  []string         `json:"suggested_tests"`
+	BlastRadius     []string         `json:"blast_radius"`
+	StructuralLinks []StructuralLink `json:"structural_links"`
+	Risk            RiskReport       `json:"risk"`
+	RecentCommits   []CommitSummary  `json:"recent_commits"`
+	Decisions       []Decision       `json:"decisions"`
+	Neighbors       []Neighbor       `json:"neighbors"`
 }
 
 func Explain(store *db.Store, targetPath string) (ExplainReport, error) {
@@ -62,15 +65,30 @@ LIMIT 5
 	if err != nil {
 		return ExplainReport{}, err
 	}
+	suggestedTests, err := SuggestedTests(store, risk.Path, 5)
+	if err != nil {
+		return ExplainReport{}, err
+	}
+	blastRadius, err := BlastRadius(store, risk.Path, 6)
+	if err != nil {
+		return ExplainReport{}, err
+	}
+	structuralLinks, err := StructuralLinks(store, risk.Path, 6)
+	if err != nil {
+		return ExplainReport{}, err
+	}
 
 	return ExplainReport{
-		Path:          risk.Path,
-		Summary:       explainSummary(risk, commits, decisions),
-		EditChecklist: editChecklist(risk, commits),
-		Risk:          risk,
-		RecentCommits: commits,
-		Decisions:     decisions,
-		Neighbors:     risk.TopNeighbors,
+		Path:            risk.Path,
+		Summary:         explainSummary(risk, commits, decisions),
+		EditChecklist:   editChecklist(risk, commits),
+		SuggestedTests:  suggestedTests,
+		BlastRadius:     blastRadius,
+		StructuralLinks: structuralLinks,
+		Risk:            risk,
+		RecentCommits:   commits,
+		Decisions:       decisions,
+		Neighbors:       risk.TopNeighbors,
 	}, nil
 }
 

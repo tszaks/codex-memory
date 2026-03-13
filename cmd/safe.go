@@ -9,7 +9,7 @@ import (
 	"github.com/tszaks/codex-memory/internal/output"
 )
 
-func runExplain(out io.Writer, args []string, jsonOutput bool) error {
+func runSafe(out io.Writer, args []string, jsonOutput bool) error {
 	target, err := requireArg(args, "path")
 	if err != nil {
 		return err
@@ -21,7 +21,7 @@ func runExplain(out io.Writer, args []string, jsonOutput bool) error {
 	}
 	defer indexer.Store.Close()
 
-	report, err := analysis.Explain(indexer.Store, target)
+	report, err := analysis.Safe(indexer.Store, target)
 	if err != nil {
 		return err
 	}
@@ -29,24 +29,13 @@ func runExplain(out io.Writer, args []string, jsonOutput bool) error {
 	return output.Write(out, report, jsonOutput, func() string {
 		lines := []string{
 			fmt.Sprintf("Path: %s", report.Path),
-			fmt.Sprintf("Risk: %s (%d)", report.Risk.Level, report.Risk.Score),
+			fmt.Sprintf("Verdict: %s", report.Verdict),
 			fmt.Sprintf("Summary: %s", report.Summary),
 			"",
-			"Before you edit:",
+			"Required checks:",
 		}
-		for _, item := range report.EditChecklist {
+		for _, item := range report.RequiredChecks {
 			lines = append(lines, "- "+item)
-		}
-		lines = append(lines,
-			"",
-			"Recent commits:",
-		)
-		for _, commit := range report.RecentCommits {
-			lines = append(lines, fmt.Sprintf("- %s %s", commit.SHA[:8], commit.Subject))
-		}
-		lines = append(lines, "", "Why it matters:")
-		for _, reason := range report.Risk.Reasons {
-			lines = append(lines, "- "+reason)
 		}
 		if len(report.SuggestedTests) > 0 {
 			lines = append(lines, "", "Suggested tests:")
@@ -58,13 +47,6 @@ func runExplain(out io.Writer, args []string, jsonOutput bool) error {
 			lines = append(lines, "", "Blast radius:")
 			for _, path := range report.BlastRadius {
 				lines = append(lines, "- "+path)
-			}
-		}
-		lines = append(lines, "", renderNeighbors(report.Neighbors))
-		if len(report.Decisions) > 0 {
-			lines = append(lines, "", "Decision notes:")
-			for _, decision := range report.Decisions {
-				lines = append(lines, fmt.Sprintf("- %s", decision.Title))
 			}
 		}
 		return strings.Join(lines, "\n")

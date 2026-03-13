@@ -19,11 +19,13 @@ func gitlogTestRepoHelper(t *testing.T) string {
 	run(t, repo, "git", "commit", "-m", "docs: add readme")
 
 	writeFile(t, filepath.Join(repo, "main.go"), "package main\n")
+	writeFile(t, filepath.Join(repo, "main_test.go"), "package main\n\nimport \"testing\"\n\nfunc TestMain(t *testing.T) {}\n")
 	writeFile(t, filepath.Join(repo, "config.yaml"), "key: value\n")
 	run(t, repo, "git", "add", ".")
 	run(t, repo, "git", "commit", "-m", "feat: add app")
 
 	writeFile(t, filepath.Join(repo, "main.go"), "package main\n\nfunc main() {}\n")
+	writeFile(t, filepath.Join(repo, "main_test.go"), "package main\n\nimport \"testing\"\n\nfunc TestMain(t *testing.T) {\n\tmain()\n}\n")
 	run(t, repo, "git", "add", ".")
 	run(t, repo, "git", "commit", "-m", "fix: update app")
 

@@ -1,53 +1,58 @@
 # codex-memory
 
-`codex-memory` is a local-first CLI that turns a repository's git history into quick, practical context.
+`codex-memory` is a local-first workflow tool for AI-powered coding.
 
-It helps you answer questions like:
+It gives an LLM the missing repository context before it edits code:
 
-- Is this file risky to touch?
-- What other files usually move with it?
-- What changed here recently?
-- What past commits might explain why this exists?
-- What should I check before I edit this file?
+- what files are risky
+- what else is likely to move
+- what tests are most relevant
+- what recent commits matter
+- what the blast radius probably looks like
 
-Instead of digging through `git log`, guessing file coupling, or relying on vague memory, you can ask the repo directly.
+The goal is simple: help agents make lower-surprise changes.
 
-## Why Use It
+## Why This Exists
 
-Code changes rarely fail because the edit was hard.
+LLMs are strong at writing code and weak at remembering repository context.
 
-They fail because the hidden context was missing:
+They often miss:
 
-- the file was touched three times last week
-- a "simple" config file quietly fans out into five other files
-- the logic was added for a very specific reason six weeks ago
-- a risky file looks isolated until you see what usually changes with it
+- hidden file coupling
+- recently unstable areas
+- test files that should run after a change
+- historical rationale buried in git
+- when a "small edit" actually has a bigger blast radius
 
-`codex-memory` keeps that context local, fast, and inspectable.
+`codex-memory` turns git history and lightweight repo structure into a small local memory layer an agent can query before coding.
 
-## What It Does
+## Best Use Case
 
-`codex-memory` indexes your repository history into a small SQLite database inside `.codex-memory/`, then exposes that history through a few focused commands.
+This tool is most useful right before an agent edits code.
 
-Current commands:
+The ideal loop looks like this:
 
-- `codex-memory index`
-- `codex-memory explain <path>`
-- `codex-memory risk <path>`
-- `codex-memory neighbors <path>`
-- `codex-memory decisions <query>`
+```bash
+codex-memory index
+codex-memory explain path/to/file --json
+codex-memory safe path/to/file --json
+codex-memory plan path/to/file --json
+```
 
-Use `--json` after any command if you want machine-readable output for agents, scripts, or other tooling.
+That gives the model enough context to:
+
+- decide whether the change is isolated or risky
+- inspect the right neighboring files first
+- choose the right tests to run
+- avoid obvious regression traps
 
 ## Install
-
-If you want the CLI on your path:
 
 ```bash
 go install github.com/tszaks/codex-memory@latest
 ```
 
-If you're working from the repo directly:
+Or run it directly from source:
 
 ```bash
 git clone https://github.com/tszaks/codex-memory.git
@@ -58,140 +63,201 @@ go run . --help
 
 ## Quick Start
 
-### 1. Index a repository
+### 1. Index the repo
 
-Run this once inside the repo you want to analyze:
+Run this inside the repository you want to analyze:
 
 ```bash
 codex-memory index
 ```
 
-Example output:
+Example:
 
 ```text
 Indexed 428 commits, 191 files, and 2634 co-change edges in /path/to/repo
 ```
 
-### 2. Start with `explain`
-
-This is the best default command when you're about to edit a file.
+### 2. Ask for a pre-edit briefing
 
 ```bash
 codex-memory explain app/services/billing.rb
 ```
 
-It gives you:
+This is the best default command.
+
+It returns:
 
 - a risk summary
-- a short pre-edit checklist
+- a short edit checklist
 - recent commits touching the file
-- files that commonly move with it
-- likely rationale pulled from commit history
+- likely rationale from commit history
+- suggested tests
+- likely blast radius
 
-### 3. Check risk directly
-
-```bash
-codex-memory risk app/services/billing.rb
-```
-
-This shows:
-
-- overall risk score and level
-- churn and recent touch count
-- number of related files
-- author count
-- last-touched timestamp
-- plain-English reasons the file may deserve extra care
-
-### 4. Find related files
+### 3. Ask if the change is safe for an agent
 
 ```bash
-codex-memory neighbors app/services/billing.rb
+codex-memory safe app/services/billing.rb
 ```
 
-Use this before making a "small" change. It helps reveal files that commonly change alongside your target.
+This gives an opinionated verdict such as:
 
-### 5. Search for likely rationale
+- `safe_with_normal_review`
+- `review_neighbors_first`
+- `inspect_context_first`
+
+It also gives the checks an agent should complete before and after editing.
+
+### 4. Generate an execution plan
+
+```bash
+codex-memory plan app/services/billing.rb
+```
+
+This turns the file context into a lightweight agent plan:
+
+- which files to inspect first
+- what steps to follow
+- which tests to run
+
+### 5. Review what changed before handoff
+
+```bash
+codex-memory review origin/main
+```
+
+This reviews the files changed between `origin/main` and `HEAD`, then reports:
+
+- risky changed files
+- focused tests to run
+- likely blast radius for each changed file
+
+This is useful before asking an agent to finalize, open a PR, or hand work back to a human.
+
+## Commands
+
+### `codex-memory index`
+
+Build or refresh the local memory database for the current repo.
+
+```bash
+codex-memory index
+codex-memory index /path/to/repo
+```
+
+### `codex-memory explain <path>`
+
+Get the highest-signal context before editing a file.
+
+```bash
+codex-memory explain src/auth/session.ts
+```
+
+### `codex-memory safe <path>`
+
+Get an agent-oriented safety verdict plus required checks.
+
+```bash
+codex-memory safe src/auth/session.ts
+```
+
+### `codex-memory plan <path>`
+
+Get a lightweight plan for how an agent should approach a change.
+
+```bash
+codex-memory plan src/auth/session.ts
+```
+
+### `codex-memory review [base-ref]`
+
+Review changed files between a base ref and `HEAD`.
+
+```bash
+codex-memory review
+codex-memory review HEAD~1
+codex-memory review origin/main
+```
+
+### `codex-memory risk <path>`
+
+Inspect the underlying file risk signals directly.
+
+```bash
+codex-memory risk src/auth/session.ts
+```
+
+### `codex-memory neighbors <path>`
+
+See files that commonly change with the target file.
+
+```bash
+codex-memory neighbors src/auth/session.ts
+```
+
+### `codex-memory decisions <query>`
+
+Search commit-derived rationale and decision notes.
 
 ```bash
 codex-memory decisions "retry logic"
 ```
 
-This searches stored decision notes derived from commit history so you can find likely explanation trails faster.
+## JSON Output
 
-## Example Workflow
+Every command supports `--json`.
 
-Before changing a file:
+This is the intended mode for LLM workflows.
 
-```bash
-codex-memory index
-codex-memory explain path/to/file
-codex-memory neighbors path/to/file
-```
-
-If you want structured output for another tool:
+Examples:
 
 ```bash
-codex-memory explain path/to/file --json
+codex-memory explain src/auth/session.ts --json
+codex-memory safe src/auth/session.ts --json
+codex-memory plan src/auth/session.ts --json
+codex-memory review origin/main --json
 ```
 
-## Why `explain` Matters
+## What The Tool Uses
 
-Most tools stop at raw history. `codex-memory explain` tries to answer the more useful question:
+`codex-memory` currently combines:
 
-> "What should I know before I touch this file?"
-
-That makes it useful for:
-
-- developers making changes in unfamiliar areas
-- AI coding tools that need local codebase context
-- quick pre-edit sanity checks
-- spotting files that are more coupled or volatile than they look
-
-## Local-First by Design
-
-`codex-memory` is intentionally simple:
-
-- no remote backend
-- no daemon
-- no embeddings requirement
-- no IDE lock-in
-- no hidden service dependency
-
-Your repository history stays local. The database is transparent. The output is easy to inspect.
-
-## Current Scope
-
-Today, `codex-memory` is built around git-history-based context:
-
-- file churn
-- recent touches
+- git history
 - co-change relationships
-- commit-derived rationale
-- actionable pre-edit summaries
+- recent touch patterns
+- author count
+- lightweight structural heuristics
+- source-to-test pairing hints
 
-It is not trying to be a full code intelligence platform. The goal is a small tool that makes edit decisions smarter.
+It is intentionally small and local-first.
+
+## What It Does Not Try To Be
+
+This is not:
+
+- a hosted code intelligence platform
+- a full static-analysis engine
+- an IDE extension
+- an embeddings-first search product
+
+It is a practical memory layer for AI coding workflows.
 
 ## Development
 
-Run the full test suite:
-
 ```bash
 go test ./...
-```
-
-Run against the repo locally:
-
-```bash
 go run . index
 go run . explain README.md
-go run . risk README.md
+go run . safe README.md
+go run . plan README.md
+go run . review HEAD~1
 ```
 
 ## Notes
 
-- Existing local databases are migrated automatically when new file-level metadata is added.
-- If a repo has not been indexed yet, `explain`, `risk`, `neighbors`, and `decisions` will tell you to run `codex-memory index` first.
+- Local databases live in `.codex-memory/`
+- Schema updates migrate automatically
+- If a repo has not been indexed yet, the analysis commands will tell you to run `codex-memory index` first
 
 ## License
 

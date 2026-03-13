@@ -38,4 +38,12 @@ func TestExplain(t *testing.T) {
 	if len(report.EditChecklist) == 0 {
 		t.Fatalf("expected explain report checklist")
 	}
+
+	if len(report.SuggestedTests) == 0 {
+		t.Fatalf("expected explain report suggested tests")
+	}
+
+	if len(report.BlastRadius) == 0 {
+		t.Fatalf("expected explain report blast radius")
+	}
 }
