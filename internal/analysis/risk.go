@@ -1,7 +1,10 @@
 package analysis
 
 import (
+	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/tszaks/codex-memory/internal/db"
@@ -40,6 +43,9 @@ WHERE repo_id = ? AND path = ?
 	var churnScore, recentTouchCount, authorCount int
 	var lastTouchedAt string
 	if err := row.Scan(&churnScore, &recentTouchCount, &authorCount, &lastTouchedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return inferredRisk(store, normalized)
+		}
 		return RiskReport{}, fmt.Errorf("read file risk data: %w", err)
 	}
 
@@ -109,6 +115,60 @@ func riskReasons(churnScore, recentTouchCount, neighborCount, authorCount int, l
 	}
 
 	return reasons
+}
+
+func inferredRisk(store *db.Store, normalizedPath string) (RiskReport, error) {
+	if _, err := os.Stat(filepath.Join(store.RepoRoot, filepath.FromSlash(normalizedPath))); err != nil {
+		return RiskReport{}, fmt.Errorf("read file risk data: %w", sql.ErrNoRows)
+	}
+
+	links, err := StructuralLinks(store, normalizedPath, 6)
+	if err != nil {
+		return RiskReport{}, err
+	}
+	tests, err := SuggestedTests(store, normalizedPath, 4)
+	if err != nil {
+		return RiskReport{}, err
+	}
+
+	reasons := []string{
+		"This file is new to indexed history, so advice is based on repo structure instead of past commits.",
+	}
+	if len(links) > 0 {
+		reasons = append(reasons, "The tool found related files based on naming or directory structure.")
+	}
+	if len(tests) > 0 {
+		reasons = append(reasons, "The tool inferred likely tests for this new file.")
+	}
+	if len(links) == 0 && len(tests) == 0 {
+		reasons = append(reasons, "This file currently looks isolated, so change risk is mostly about local correctness.")
+	}
+
+	score := min(len(links), 3)*2 + min(len(tests), 2)*2
+	level := "low"
+	if len(links) >= 2 || len(tests) > 0 {
+		level = "medium"
+	}
+
+	return RiskReport{
+		Path:          normalizedPath,
+		Score:         score,
+		Level:         level,
+		Reasons:       reasons,
+		TopNeighbors:  structuralNeighbors(links, 5),
+		NeighborCount: len(links),
+	}, nil
+}
+
+func structuralNeighbors(links []StructuralLink, limit int) []Neighbor {
+	out := make([]Neighbor, 0, min(len(links), limit))
+	for _, link := range links {
+		out = append(out, Neighbor{Path: link.Path})
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 func min(a, b int) int {

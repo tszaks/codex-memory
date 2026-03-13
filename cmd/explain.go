@@ -38,12 +38,13 @@ func runExplain(out io.Writer, args []string, jsonOutput bool) error {
 		for _, item := range report.EditChecklist {
 			lines = append(lines, "- "+item)
 		}
-		lines = append(lines,
-			"",
-			"Recent commits:",
-		)
-		for _, commit := range report.RecentCommits {
-			lines = append(lines, fmt.Sprintf("- %s %s", commit.SHA[:8], commit.Subject))
+		if len(report.RecentCommits) > 0 {
+			lines = append(lines, "", "Recent commits:")
+			for _, commit := range report.RecentCommits {
+				lines = append(lines, fmt.Sprintf("- %s %s", commit.SHA[:8], commit.Subject))
+			}
+		} else {
+			lines = append(lines, "", "Recent commits:", "- No indexed commits for this file yet.")
 		}
 		lines = append(lines, "", "Why it matters:")
 		for _, reason := range report.Risk.Reasons {

@@ -104,10 +104,7 @@ func SuggestedTestCommands(store *db.Store, targetPath string, limit int) ([]str
 		return nil, err
 	}
 
-	commands := make([]string, 0, 2)
-	if strings.HasSuffix(normalized, ".go") || hasGoTests(tests) {
-		commands = append(commands, "go test ./...")
-	}
+	commands := inferredTestCommands(store.RepoRoot, normalized, tests)
 
 	return uniqueStrings(commands, limit), nil
 }
@@ -277,4 +274,82 @@ func hasGoTests(paths []string) bool {
 
 func osReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+func inferredTestCommands(repoRoot, normalized string, tests []string) []string {
+	commands := make([]string, 0, 3)
+
+	if strings.HasSuffix(normalized, ".go") || hasGoTests(tests) {
+		packageDir := filepath.ToSlash(filepath.Dir(normalized))
+		if packageDir == "." {
+			commands = append(commands, "go test .")
+		} else {
+			commands = append(commands, "go test ./"+packageDir)
+		}
+		commands = append(commands, "go test ./...")
+		return commands
+	}
+
+	jsTest := firstMatchingPath(tests, func(path string) bool {
+		return strings.HasSuffix(path, ".test.js") ||
+			strings.HasSuffix(path, ".test.ts") ||
+			strings.HasSuffix(path, ".test.tsx") ||
+			strings.HasSuffix(path, ".spec.js") ||
+			strings.HasSuffix(path, ".spec.ts") ||
+			strings.HasSuffix(path, ".spec.tsx")
+	})
+	if jsTest != "" {
+		packageManager := inferPackageManager(repoRoot)
+		if packageManager != "" {
+			commands = append(commands, packageManager+" test -- "+jsTest)
+			commands = append(commands, packageManager+" test")
+		}
+		return commands
+	}
+
+	pyTest := firstMatchingPath(tests, func(path string) bool {
+		return strings.HasSuffix(path, "_test.py") || strings.HasPrefix(filepath.Base(path), "test_")
+	})
+	if pyTest != "" {
+		commands = append(commands, "pytest "+pyTest, "pytest")
+		return commands
+	}
+
+	rubyTest := firstMatchingPath(tests, func(path string) bool {
+		return strings.HasSuffix(path, "_spec.rb")
+	})
+	if rubyTest != "" {
+		commands = append(commands, "bundle exec rspec "+rubyTest, "bundle exec rspec")
+	}
+
+	return commands
+}
+
+func firstMatchingPath(paths []string, predicate func(string) bool) string {
+	for _, path := range paths {
+		if predicate(path) {
+			return path
+		}
+	}
+	return ""
+}
+
+func inferPackageManager(repoRoot string) string {
+	switch {
+	case fileExists(filepath.Join(repoRoot, "pnpm-lock.yaml")):
+		return "pnpm"
+	case fileExists(filepath.Join(repoRoot, "yarn.lock")):
+		return "yarn"
+	case fileExists(filepath.Join(repoRoot, "bun.lock")), fileExists(filepath.Join(repoRoot, "bun.lockb")):
+		return "bun"
+	case fileExists(filepath.Join(repoRoot, "package-lock.json")), fileExists(filepath.Join(repoRoot, "package.json")):
+		return "npm"
+	default:
+		return ""
+	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }

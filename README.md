@@ -7,7 +7,7 @@ It gives an LLM fast repo context before, during, and after edits:
 - what files are risky
 - what else is likely to move
 - what tests are most relevant
-- what command to run for the fastest useful verification
+- what focused test command to run first, plus the safer fallback
 - what the blast radius probably is
 - what changed in the working tree right now
 
@@ -72,6 +72,8 @@ go run . --help
 - `changed-now`: shows the live working tree
 - `review`: reviews branch diff plus working-tree changes with confidence
 - `handoff`: generates a final summary before handoff
+
+It also handles brand-new files better now by inferring likely related files and tests even before they have indexed history.
 
 ## Example
 
