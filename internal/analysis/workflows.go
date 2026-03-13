@@ -13,6 +13,8 @@ type SafeReport struct {
 	Path           string           `json:"path"`
 	Verdict        string           `json:"verdict"`
 	Summary        string           `json:"summary"`
+	Freshness      Freshness        `json:"freshness"`
+	Evidence       Evidence         `json:"evidence"`
 	RequiredChecks []string         `json:"required_checks"`
 	SuggestedTests []string         `json:"suggested_tests"`
 	TestCommands   []string         `json:"test_commands"`
@@ -26,6 +28,8 @@ type SafeReport struct {
 type PlanReport struct {
 	Path           string           `json:"path"`
 	Goal           string           `json:"goal"`
+	Freshness      Freshness        `json:"freshness"`
+	Evidence       Evidence         `json:"evidence"`
 	Steps          []string         `json:"steps"`
 	FilesToInspect []string         `json:"files_to_inspect"`
 	TestsToRun     []string         `json:"tests_to_run"`
@@ -52,6 +56,8 @@ type ReviewReport struct {
 	BaseRef          string            `json:"base_ref"`
 	HeadRef          string            `json:"head_ref"`
 	Summary          string            `json:"summary"`
+	Freshness        Freshness         `json:"freshness"`
+	Evidence         Evidence          `json:"evidence"`
 	ChangedFiles     []ReviewedFile    `json:"changed_files"`
 	RequiredTests    []string          `json:"required_tests"`
 	TestCommands     []string          `json:"test_commands"`
@@ -72,13 +78,17 @@ type ChangedNowFile struct {
 }
 
 type ChangedNowReport struct {
-	Summary string           `json:"summary"`
-	Files   []ChangedNowFile `json:"files"`
-	Task    TaskScopeReport  `json:"task"`
+	Summary   string           `json:"summary"`
+	Freshness Freshness        `json:"freshness"`
+	Evidence  Evidence         `json:"evidence"`
+	Files     []ChangedNowFile `json:"files"`
+	Task      TaskScopeReport  `json:"task"`
 }
 
 type HandoffReport struct {
 	Summary     string           `json:"summary"`
+	Freshness   Freshness        `json:"freshness"`
+	Evidence    Evidence         `json:"evidence"`
 	Review      ReviewReport     `json:"review"`
 	ChangedNow  ChangedNowReport `json:"changed_now"`
 	NextActions []string         `json:"next_actions"`
@@ -133,11 +143,15 @@ func Safe(store *db.Store, targetPath string) (SafeReport, error) {
 	}
 
 	confidence := buildConfidence(true, len(structuralLinks), len(tests), len(blastRadius))
+	freshness := buildFreshness(store)
+	evidence := buildEvidence(freshness, len(structuralLinks), len(tests), verification, TaskScopeReport{}, 1)
 
 	return SafeReport{
 		Path:           risk.Path,
 		Verdict:        verdict,
 		Summary:        summary,
+		Freshness:      freshness,
+		Evidence:       evidence,
 		RequiredChecks: checks,
 		SuggestedTests: tests,
 		TestCommands:   testCommands,
@@ -167,6 +181,8 @@ func Plan(store *db.Store, targetPath string) (PlanReport, error) {
 	return PlanReport{
 		Path:           safe.Path,
 		Goal:           "Help an agent make a low-surprise change with the right context loaded first.",
+		Freshness:      safe.Freshness,
+		Evidence:       safe.Evidence,
 		Steps:          steps,
 		FilesToInspect: filesToInspect,
 		TestsToRun:     safe.SuggestedTests,
@@ -284,6 +300,7 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		return ReviewReport{}, err
 	}
 	confidence := buildConfidence(len(reviewed) > 0, 1, len(requiredTests), len(reviewed))
+	freshness := buildFreshness(store)
 	verification := VerificationPlan{
 		Fast: uniqueStrings(reviewFast, 5),
 		Safe: uniqueStrings(reviewSafe, 6),
@@ -315,6 +332,7 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		actionGuidance.RecommendedNextCommand = verification.Fast[0]
 	}
 	sortReviewedFiles(reviewed, task)
+	evidence := buildEvidence(freshness, len(reviewed), len(requiredTests), verification, task, len(reviewed))
 
 	summary := fmt.Sprintf("Review %d changed files before handing this branch back to an agent.", len(changed))
 	if highRiskCount > 0 {
@@ -325,6 +343,8 @@ func Review(store *db.Store, baseRef string) (ReviewReport, error) {
 		BaseRef:          baseRef,
 		HeadRef:          "HEAD",
 		Summary:          summary,
+		Freshness:        freshness,
+		Evidence:         evidence,
 		ChangedFiles:     reviewed,
 		RequiredTests:    uniqueStrings(requiredTests, 10),
 		TestCommands:     uniqueStrings(testCommands, 5),
@@ -381,11 +401,15 @@ func ChangedNow(store *db.Store) (ChangedNowReport, error) {
 	if err != nil {
 		return ChangedNowReport{}, err
 	}
+	freshness := buildFreshness(store)
+	evidence := buildEvidence(freshness, len(files), 0, VerificationPlan{}, task, 0)
 
 	return ChangedNowReport{
-		Summary: fmt.Sprintf("Working tree currently touches %d file(s).", len(files)),
-		Files:   files,
-		Task:    task,
+		Summary:   fmt.Sprintf("Working tree currently touches %d file(s).", len(files)),
+		Freshness: freshness,
+		Evidence:  evidence,
+		Files:     files,
+		Task:      task,
 	}, nil
 }
 
@@ -416,8 +440,13 @@ func Handoff(store *db.Store, baseRef string) (HandoffReport, error) {
 		nextActions = append(nextActions, "No extra handoff actions suggested.")
 	}
 
+	freshness := buildFreshness(store)
+	evidence := buildEvidence(freshness, len(review.ChangedFiles), len(review.RequiredTests), review.Verification, review.Task, len(review.ChangedFiles))
+
 	return HandoffReport{
 		Summary:     "Use this report to hand work from an agent back to a human or another agent with less surprise.",
+		Freshness:   freshness,
+		Evidence:    evidence,
 		Review:      review,
 		ChangedNow:  changedNow,
 		NextActions: nextActions,

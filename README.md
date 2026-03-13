@@ -9,6 +9,7 @@ It gives an LLM fast repo context before, during, and after edits:
 - what tests are most relevant
 - what focused test command to run first, plus the safer fallback
 - what fast, safe, and full verification steps to run
+- how fresh the local index is, and what evidence the guidance is based on
 - what the blast radius probably is
 - what action an agent should take next
 - whether the current task drifted outside its planned scope

@@ -29,6 +29,14 @@ func runHandoff(out io.Writer, args []string, jsonOutput bool) error {
 			fmt.Sprintf("Review: %s", report.Review.Summary),
 			fmt.Sprintf("Changed now: %s", report.ChangedNow.Summary),
 		}
+		if freshnessLines := renderFreshness(report.Freshness); len(freshnessLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, freshnessLines...)
+		}
+		if evidenceLines := renderEvidence(report.Evidence); len(evidenceLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, evidenceLines...)
+		}
 		if len(report.NextActions) > 0 {
 			lines = append(lines, "", "Next actions:")
 			for _, action := range report.NextActions {

@@ -15,6 +15,8 @@ type CommitSummary struct {
 type ExplainReport struct {
 	Path            string           `json:"path"`
 	Summary         string           `json:"summary"`
+	Freshness       Freshness        `json:"freshness"`
+	Evidence        Evidence         `json:"evidence"`
 	EditChecklist   []string         `json:"edit_checklist"`
 	SuggestedTests  []string         `json:"suggested_tests"`
 	TestCommands    []string         `json:"test_commands"`
@@ -90,11 +92,15 @@ LIMIT 5
 		return ExplainReport{}, err
 	}
 	confidence := buildConfidence(true, len(structuralLinks), len(suggestedTests), len(blastRadius))
+	freshness := buildFreshness(store)
 	actionGuidance := buildActionGuidance(risk.Path, risk, confidence, structuralLinks, blastRadius, verification.Fast)
+	evidence := buildEvidence(freshness, len(structuralLinks), len(suggestedTests), verification, TaskScopeReport{}, len(commits))
 
 	return ExplainReport{
 		Path:            risk.Path,
 		Summary:         explainSummary(risk, commits, decisions),
+		Freshness:       freshness,
+		Evidence:        evidence,
 		EditChecklist:   editChecklist(risk, commits),
 		SuggestedTests:  suggestedTests,
 		TestCommands:    testCommands,

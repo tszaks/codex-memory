@@ -53,6 +53,9 @@ func TestSafe(t *testing.T) {
 	if !report.ActionGuidance.MustVerify {
 		t.Fatalf("expected safe report to require verification")
 	}
+	if report.Freshness.IndexedAt == "" || len(report.Evidence.Sources) == 0 {
+		t.Fatalf("expected safe freshness and evidence metadata")
+	}
 }
 
 func TestPlan(t *testing.T) {
@@ -89,6 +92,9 @@ func TestPlan(t *testing.T) {
 	}
 	if report.ActionGuidance.RecommendedNextCommand == "" {
 		t.Fatalf("expected plan recommended next command")
+	}
+	if report.Freshness.IndexedAt == "" || len(report.Evidence.Sources) == 0 {
+		t.Fatalf("expected plan freshness and evidence metadata")
 	}
 }
 
@@ -129,6 +135,9 @@ func TestReview(t *testing.T) {
 	}
 	if !report.ActionGuidance.MustVerify {
 		t.Fatalf("expected review to require verification")
+	}
+	if report.Freshness.IndexedAt == "" || len(report.Evidence.Sources) == 0 {
+		t.Fatalf("expected review freshness and evidence metadata")
 	}
 	if len(report.ChangedFiles[0].BoundaryLabels) == 0 && report.ChangedFiles[0].RiskLevel == "low" {
 		t.Fatalf("expected prioritized review output, got %#v", report.ChangedFiles)
@@ -190,6 +199,9 @@ func TestChangedNow(t *testing.T) {
 	if len(report.Files) == 0 {
 		t.Fatalf("expected changed-now files")
 	}
+	if report.Freshness.IndexedAt == "" || len(report.Evidence.Sources) == 0 {
+		t.Fatalf("expected changed-now freshness and evidence metadata")
+	}
 }
 
 func TestHandoff(t *testing.T) {
@@ -216,6 +228,9 @@ func TestHandoff(t *testing.T) {
 	}
 	if len(report.NextActions) == 0 {
 		t.Fatalf("expected handoff next actions")
+	}
+	if report.Freshness.IndexedAt == "" || len(report.Evidence.Sources) == 0 {
+		t.Fatalf("expected handoff freshness and evidence metadata")
 	}
 }
 
@@ -304,5 +319,33 @@ func TestReviewPrioritizesSensitiveFilesFirst(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected config.yaml to stay in the top review tier with boundary labels, got %#v", report.ChangedFiles)
+	}
+}
+
+func TestExplainMarksStaleIndex(t *testing.T) {
+	repo := indexRepo(t)
+	store, err := index.OpenStore(repo)
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := index.New(store).Run(); err != nil {
+		t.Fatalf("index run failed: %v", err)
+	}
+
+	run(t, repo, "git", "config", "user.name", "Stale User")
+	run(t, repo, "git", "config", "user.email", "stale@example.com")
+	writeFile(t, filepath.Join(repo, "README.md"), "# changed after index\n")
+	run(t, repo, "git", "add", "README.md")
+	run(t, repo, "git", "commit", "-m", "docs: drift after index")
+
+	report, err := Explain(store, "main.go")
+	if err != nil {
+		t.Fatalf("Explain failed: %v", err)
+	}
+
+	if !report.Freshness.IsStale {
+		t.Fatalf("expected stale freshness after new commit, got %#v", report.Freshness)
 	}
 }

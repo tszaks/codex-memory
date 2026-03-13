@@ -32,9 +32,16 @@ func runExplain(out io.Writer, args []string, jsonOutput bool) error {
 			fmt.Sprintf("Risk: %s (%d)", report.Risk.Level, report.Risk.Score),
 			fmt.Sprintf("Confidence: %s (%d)", report.Confidence.Level, report.Confidence.Score),
 			fmt.Sprintf("Summary: %s", report.Summary),
-			"",
-			"Before you edit:",
 		}
+		if freshnessLines := renderFreshness(report.Freshness); len(freshnessLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, freshnessLines...)
+		}
+		if evidenceLines := renderEvidence(report.Evidence); len(evidenceLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, evidenceLines...)
+		}
+		lines = append(lines, "", "Before you edit:")
 		for _, item := range report.EditChecklist {
 			lines = append(lines, "- "+item)
 		}

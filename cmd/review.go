@@ -29,6 +29,14 @@ func runReview(out io.Writer, args []string, jsonOutput bool) error {
 			fmt.Sprintf("Confidence: %s (%d)", report.Confidence.Level, report.Confidence.Score),
 			fmt.Sprintf("Summary: %s", report.Summary),
 		}
+		if freshnessLines := renderFreshness(report.Freshness); len(freshnessLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, freshnessLines...)
+		}
+		if evidenceLines := renderEvidence(report.Evidence); len(evidenceLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, evidenceLines...)
+		}
 		if len(report.RequiredTests) > 0 {
 			lines = append(lines, "", "Required tests:")
 			for _, test := range report.RequiredTests {

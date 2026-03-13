@@ -31,9 +31,16 @@ func runPlan(out io.Writer, args []string, jsonOutput bool) error {
 			fmt.Sprintf("Path: %s", report.Path),
 			fmt.Sprintf("Goal: %s", report.Goal),
 			fmt.Sprintf("Confidence: %s (%d)", report.Confidence.Level, report.Confidence.Score),
-			"",
-			"Files to inspect:",
 		}
+		if freshnessLines := renderFreshness(report.Freshness); len(freshnessLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, freshnessLines...)
+		}
+		if evidenceLines := renderEvidence(report.Evidence); len(evidenceLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, evidenceLines...)
+		}
+		lines = append(lines, "", "Files to inspect:")
 		for _, file := range report.FilesToInspect {
 			lines = append(lines, "- "+file)
 		}

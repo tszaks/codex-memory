@@ -67,4 +67,10 @@ func TestExplain(t *testing.T) {
 	if !report.ActionGuidance.MustVerify {
 		t.Fatalf("expected explain to require verification")
 	}
+	if report.Freshness.IndexedAt == "" {
+		t.Fatalf("expected explain freshness metadata")
+	}
+	if len(report.Evidence.Sources) == 0 {
+		t.Fatalf("expected explain evidence metadata")
+	}
 }

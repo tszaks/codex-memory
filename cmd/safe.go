@@ -32,9 +32,16 @@ func runSafe(out io.Writer, args []string, jsonOutput bool) error {
 			fmt.Sprintf("Verdict: %s", report.Verdict),
 			fmt.Sprintf("Confidence: %s (%d)", report.Confidence.Level, report.Confidence.Score),
 			fmt.Sprintf("Summary: %s", report.Summary),
-			"",
-			"Required checks:",
 		}
+		if freshnessLines := renderFreshness(report.Freshness); len(freshnessLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, freshnessLines...)
+		}
+		if evidenceLines := renderEvidence(report.Evidence); len(evidenceLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, evidenceLines...)
+		}
+		lines = append(lines, "", "Required checks:")
 		for _, item := range report.RequiredChecks {
 			lines = append(lines, "- "+item)
 		}

@@ -76,6 +76,52 @@ func renderActionGuidance(guidance analysis.ActionGuidance) []string {
 	return lines
 }
 
+func renderFreshness(freshness analysis.Freshness) []string {
+	if freshness.IndexedAt == "" && freshness.CurrentCommit == "" {
+		return nil
+	}
+	lines := []string{fmt.Sprintf("Freshness: %s", freshnessSummary(freshness))}
+	if len(freshness.Reasons) > 0 {
+		lines = append(lines, "Freshness details:")
+		for _, reason := range freshness.Reasons {
+			lines = append(lines, "- "+reason)
+		}
+	}
+	return lines
+}
+
+func renderEvidence(evidence analysis.Evidence) []string {
+	lines := make([]string, 0)
+	if len(evidence.Sources) > 0 {
+		lines = append(lines, "Evidence sources:")
+		for _, source := range evidence.Sources {
+			lines = append(lines, "- "+source)
+		}
+	}
+	if len(evidence.Notes) > 0 {
+		lines = append(lines, "Evidence notes:")
+		for _, note := range evidence.Notes {
+			lines = append(lines, "- "+note)
+		}
+	}
+	return lines
+}
+
+func freshnessSummary(freshness analysis.Freshness) string {
+	state := "fresh"
+	if freshness.IsStale {
+		state = "stale"
+	}
+	parts := []string{state}
+	if freshness.WorkingTreeDirty {
+		parts = append(parts, "working tree dirty")
+	}
+	if freshness.IndexedAt != "" {
+		parts = append(parts, "indexed at "+freshness.IndexedAt)
+	}
+	return strings.Join(parts, " | ")
+}
+
 func renderVerificationPlan(plan analysis.VerificationPlan) []string {
 	lines := make([]string, 0)
 	if len(plan.Fast) > 0 {

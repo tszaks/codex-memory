@@ -45,6 +45,16 @@ func CurrentBranch(repoRoot string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+func CurrentCommit(repoRoot string) (string, error) {
+	cmd := exec.Command("git", "-C", repoRoot, "rev-parse", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to read git head commit: %w", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
 func ReadHistory(repoRoot string) ([]Commit, error) {
 	cmd := exec.Command(
 		"git",

@@ -24,6 +24,14 @@ func runChangedNow(out io.Writer, args []string, jsonOutput bool) error {
 
 	return output.Write(out, report, jsonOutput, func() string {
 		lines := []string{report.Summary}
+		if freshnessLines := renderFreshness(report.Freshness); len(freshnessLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, freshnessLines...)
+		}
+		if evidenceLines := renderEvidence(report.Evidence); len(evidenceLines) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, evidenceLines...)
+		}
 		for _, file := range report.Files {
 			lines = append(lines, fmt.Sprintf("- %s (%s, %s)", file.Path, file.RiskLevel, file.WorkingTreeStatus))
 		}
