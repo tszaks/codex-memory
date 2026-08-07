@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 )
@@ -23,13 +24,22 @@ const (
 	maxStoredRawEventJSON        = 20_000
 	maxStoredRawEventsPerSession = 100
 	maxStoredMessageText         = 50_000
+	maxStoredCommandText         = 20_000
+	maxStoredCommands            = 1_000
+	maxStoredErrors              = 200
 	maxSearchBlobText            = 1_000_000
-	maxParseRolloutBytes         = 100 * 1024 * 1024
+	largeTranscriptHeadMessages  = 200
+	largeTranscriptTailMessages  = 200
 	activeRolloutQuietPeriod     = 2 * time.Minute
 	defaultIndexSafetyBuffer     = 30 * time.Minute
 )
 
+var largeTranscriptThresholdBytes int64 = 100 * 1024 * 1024
+
 var secretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
+	regexp.MustCompile(`(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s'"` + "`" + `]+`),
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`),
 	regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|passwd|authorization|bearer)\s*[:=]\s*['"]?([A-Za-z0-9_./+=:-]{12,})`),
 	regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`),
 	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{20,}`),
@@ -59,6 +69,7 @@ type Options struct {
 	Since          time.Duration
 	SafetyBuffer   time.Duration
 	EmbeddingModel string
+	StoreRawEvents bool
 }
 
 type Session struct {
@@ -100,6 +111,20 @@ type ParsedSession struct {
 	RawEvents   []RawEvent
 	EventCounts map[string]int
 	SearchBlob  string
+	Coverage    SessionCoverage
+
+	messageCount int
+	messageTail  []Message
+	tailNext     int
+}
+
+type SessionCoverage struct {
+	Mode            string `json:"mode"`
+	RawBytes        int64  `json:"raw_bytes"`
+	MessagesSeen    int    `json:"messages_seen"`
+	MessagesStored  int    `json:"messages_stored"`
+	MessagesDropped int    `json:"messages_dropped"`
+	Warning         string `json:"warning,omitempty"`
 }
 
 type RawEvent struct {
@@ -134,6 +159,7 @@ type Stats struct {
 	Messages   int              `json:"messages"`
 	Chunks     int              `json:"chunks"`
 	Embeddings int              `json:"embeddings"`
+	Capsules   int              `json:"capsules"`
 	Models     []EmbeddingModel `json:"models"`
 }
 
@@ -330,6 +356,13 @@ CREATE TABLE IF NOT EXISTS codex_session_state (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS codex_session_capsules (
+  session_id TEXT PRIMARY KEY,
+  schema_version INTEGER NOT NULL,
+  capsule_json TEXT NOT NULL,
+  search_text TEXT NOT NULL,
+  generated_at TEXT NOT NULL
+);
 `)
 	return err
 }
@@ -391,6 +424,9 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 			mergeState(&parsed.Session, state[parsed.Session.ID])
 			parsed.Session.Machine = opts.Machine
 			parsed.Session.Source = first(parsed.Session.Source, "codex")
+			if !opts.StoreRawEvents {
+				parsed.RawEvents = nil
+			}
 			if err := store.upsert(parsed, state[parsed.Session.ID]); err != nil {
 				return count, err
 			}
@@ -417,6 +453,9 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 				return count, fmt.Errorf("parse %s: %w", file, err)
 			}
 			parsed.Session.Machine = opts.Machine
+			if !opts.StoreRawEvents {
+				parsed.RawEvents = nil
+			}
 			if err := store.upsert(parsed, map[string]any{"provider": "claude"}); err != nil {
 				return count, err
 			}
@@ -572,6 +611,7 @@ func (s *Store) upsert(parsed ParsedSession, metadata map[string]any) error {
 		"DELETE FROM codex_session_chunks WHERE session_id=?",
 		"DELETE FROM codex_session_fts WHERE session_id=?",
 		"DELETE FROM codex_message_fts WHERE session_id=?",
+		"DELETE FROM codex_session_capsules WHERE session_id=?",
 	} {
 		if _, err := tx.Exec(stmt, sess.ID); err != nil {
 			return err
@@ -608,6 +648,15 @@ ON CONFLICT(id) DO UPDATE SET machine=excluded.machine,title=excluded.title,firs
 		if _, err := tx.Exec(`INSERT INTO codex_session_chunks(id,session_id,chunk_index,kind,text,text_sha256,token_estimate,metadata_json) VALUES(?,?,?,?,?,?,?,?)`, c.ID, c.SessionID, c.Index, c.Kind, c.Text, c.TextSHA256, c.TokenEstimate, j(c.Metadata)); err != nil {
 			return err
 		}
+	}
+	capsule := buildSessionCapsule(parsed)
+	capsuleJSON, err := json.Marshal(capsule)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO codex_session_capsules(session_id,schema_version,capsule_json,search_text,generated_at) VALUES(?,?,?,?,?)
+ON CONFLICT(session_id) DO UPDATE SET schema_version=excluded.schema_version,capsule_json=excluded.capsule_json,search_text=excluded.search_text,generated_at=excluded.generated_at`, sess.ID, capsule.SchemaVersion, string(capsuleJSON), capsuleSearchText(capsule), capsule.GeneratedAt); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -715,6 +764,7 @@ func StatsReadPath(path string) (Stats, error) {
 	_ = store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_messages`).Scan(&st.Messages)
 	_ = store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_chunks`).Scan(&st.Chunks)
 	_ = store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_embeddings`).Scan(&st.Embeddings)
+	_ = store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_capsules`).Scan(&st.Capsules)
 	rows, err := store.db.Query(`SELECT provider, model, dim, COUNT(*) FROM codex_session_embeddings GROUP BY provider, model, dim ORDER BY COUNT(*) DESC`)
 	if err == nil {
 		defer rows.Close()
@@ -840,8 +890,8 @@ func mergeState(s *Session, m map[string]any) {
 	if m == nil {
 		return
 	}
-	s.Title = first(s.Title, str(m["title"]), str(m["preview"]))
-	s.FirstUserMessage = first(s.FirstUserMessage, str(m["first_user_message"]))
+	s.Title = first(s.Title, normalizeUserText(str(m["title"])), normalizeUserText(str(m["preview"])))
+	s.FirstUserMessage = first(s.FirstUserMessage, normalizeUserText(str(m["first_user_message"])))
 	s.CWD = first(s.CWD, str(m["cwd"]))
 	s.Source = first(s.Source, str(m["source"]))
 	s.ModelProvider = first(s.ModelProvider, str(m["model_provider"]))
@@ -1023,13 +1073,17 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n]
+	end := n
+	for end > 0 && !utf8.ValidString(s[:end]) {
+		end--
+	}
+	return s[:end]
 }
 func capMessageText(s string) string {
 	if len(s) <= maxStoredMessageText {
 		return s
 	}
-	return s[:maxStoredMessageText] + fmt.Sprintf("\n...[truncated message from %d bytes]", len(s))
+	return truncate(s, maxStoredMessageText) + fmt.Sprintf("\n...[truncated message from %d bytes]", len(s))
 }
 func isoAny(v any) string {
 	raw := str(v)
@@ -1050,13 +1104,63 @@ func isoAny(v any) string {
 }
 func parseInt(s string) (int64, error) { var n int64; _, err := fmt.Sscan(s, &n); return n, err }
 func isContextNoise(s string) bool {
+	return normalizeUserText(s) == ""
+}
+
+var injectedContextBlocks = []*regexp.Regexp{
+	regexp.MustCompile(`(?is)<recommended_plugins>.*?</recommended_plugins>`),
+	regexp.MustCompile(`(?is)<app-context>.*?</app-context>`),
+	regexp.MustCompile(`(?is)<skills_instructions>.*?</skills_instructions>`),
+	regexp.MustCompile(`(?is)<environment_context>.*?</environment_context>`),
+	regexp.MustCompile(`(?is)<permissions instructions>.*?</permissions instructions>`),
+	regexp.MustCompile(`(?is)<apps_instructions>.*?</apps_instructions>`),
+	regexp.MustCompile(`(?is)<plugins_instructions>.*?</plugins_instructions>`),
+	regexp.MustCompile(`(?is)<collaboration_mode>.*?</collaboration_mode>`),
+	regexp.MustCompile(`(?is)<INSTRUCTIONS>.*?</INSTRUCTIONS>`),
+}
+
+func normalizeUserText(s string) string {
 	t := strings.TrimSpace(s)
-	for _, p := range []string{"# AGENTS.md instructions", "<environment_context>", "<permissions instructions>", "<apps_instructions>", "<INSTRUCTIONS>"} {
-		if strings.HasPrefix(t, p) {
-			return true
+	lower := strings.ToLower(t)
+	startsWithInjectedContext := false
+	for _, prefix := range []string{
+		"<recommended_plugins>",
+		"<app-context>",
+		"<skills_instructions>",
+		"<environment_context>",
+		"<permissions instructions>",
+		"<apps_instructions>",
+		"<plugins_instructions>",
+		"<collaboration_mode>",
+		"<instructions>",
+		"# agents.md instructions",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			startsWithInjectedContext = true
+			break
 		}
 	}
-	return false
+	if !startsWithInjectedContext {
+		return t
+	}
+	for _, pattern := range injectedContextBlocks {
+		t = pattern.ReplaceAllString(t, "\n")
+	}
+	var lines []string
+	for _, line := range strings.Split(t, "\n") {
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "# agents.md instructions", "# codex loader note":
+			continue
+		}
+		lines = append(lines, line)
+	}
+	t = strings.TrimSpace(strings.Join(lines, "\n"))
+	for _, prefix := range []string{"<recommended_plugins>", "<environment_context>", "<permissions instructions>", "<apps_instructions>", "<instructions>"} {
+		if strings.HasPrefix(strings.ToLower(t), prefix) {
+			return ""
+		}
+	}
+	return t
 }
 func contentText(v any) string {
 	switch x := v.(type) {

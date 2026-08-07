@@ -177,8 +177,9 @@ func runSessionsIndex(out io.Writer, args []string, jsonOutput bool) error {
 	since := fs.String("since", "", "")
 	safetyBuffer := fs.String("safety-buffer", "30m", "")
 	fs.BoolVar(&opts.Force, "force", false, "")
+	fs.BoolVar(&opts.StoreRawEvents, "raw-events", false, "")
 	fs.Var((*multiStringFlag)(&include), "include", "")
-	if err := parseSessionFlags(fs, args, map[string]struct{}{"codex-home": {}, "claude-home": {}, "provider": {}, "db": {}, "machine": {}, "include": {}, "model": {}, "since": {}, "safety-buffer": {}}, map[string]struct{}{"force": {}}); err != nil {
+	if err := parseSessionFlags(fs, args, map[string]struct{}{"codex-home": {}, "claude-home": {}, "provider": {}, "db": {}, "machine": {}, "include": {}, "model": {}, "since": {}, "safety-buffer": {}}, map[string]struct{}{"force": {}, "raw-events": {}}); err != nil {
 		return err
 	}
 	if fs.NArg() > 0 {
@@ -442,7 +443,7 @@ func runSessionsStats(out io.Writer, args []string, jsonOutput bool) error {
 	if jsonOutput {
 		return json.NewEncoder(out).Encode(stats)
 	}
-	fmt.Fprintf(out, "sessions: %d\nevents: %d\nmessages: %d\nchunks: %d\nembeddings: %d\n", stats.Sessions, stats.Events, stats.Messages, stats.Chunks, stats.Embeddings)
+	fmt.Fprintf(out, "sessions: %d\nevents: %d\nmessages: %d\nchunks: %d\nembeddings: %d\ncapsules: %d\n", stats.Sessions, stats.Events, stats.Messages, stats.Chunks, stats.Embeddings, stats.Capsules)
 	for _, m := range stats.Models {
 		fmt.Fprintf(out, "- %s/%s dim=%d count=%d\n", m.Provider, m.Model, m.Dim, m.Count)
 	}
@@ -492,9 +493,9 @@ func renderSessionDoctor(out io.Writer, report sessionmemory.SessionDoctorReport
 		return
 	}
 	fmt.Fprintf(out, "storage: %.1f MiB, directory %s, file %s\n", float64(report.DBSizeBytes)/(1024*1024), report.DirectoryMode, report.FileMode)
-	fmt.Fprintf(out, "content: %d sessions, %d messages, %d chunks, %d embeddings\n", report.Stats.Sessions, report.Stats.Messages, report.Stats.Chunks, report.Stats.Embeddings)
+	fmt.Fprintf(out, "content: %d sessions, %d messages, %d chunks, %d embeddings, %d capsules\n", report.Stats.Sessions, report.Stats.Messages, report.Stats.Chunks, report.Stats.Embeddings, report.Stats.Capsules)
 	fmt.Fprintf(out, "integrity: %d orphan embeddings, %d stale embeddings, %d missing embeddings\n", report.OrphanEmbeddings, report.StaleEmbeddings, report.EmbeddingBacklog)
-	fmt.Fprintf(out, "coverage: %d noisy titles, %d oversized first messages, %d skipped large sessions\n", report.NoisyTitles, report.OversizedFirstMessages, report.SkippedLargeSessions)
+	fmt.Fprintf(out, "coverage: %d noisy titles, %d oversized first messages, %d legacy skipped large sessions, %d missing capsules\n", report.NoisyTitles, report.OversizedFirstMessages, report.SkippedLargeSessions, report.MissingCapsules)
 	if report.Repair.OrphanEmbeddingsRemoved > 0 || report.Repair.StaleEmbeddingsRemoved > 0 || report.Repair.RawEventsRemoved > 0 || report.Repair.Vacuumed {
 		fmt.Fprintf(out, "repaired: %d orphan embeddings, %d stale embeddings, %d raw events", report.Repair.OrphanEmbeddingsRemoved, report.Repair.StaleEmbeddingsRemoved, report.Repair.RawEventsRemoved)
 		if report.Repair.Vacuumed {
@@ -611,7 +612,7 @@ func printSessionsHelp(out io.Writer) {
 Usage:
   pallium sessions live [--all] [--details] [--json]
   pallium sessions watch [--all] [--details]
-  pallium sessions index [--provider all|codex|claude] [--codex-home ~/.codex] [--claude-home ~/.claude] [--include path] [--machine name] [--model text-embedding-3-small] [--safety-buffer 30m] [--since 24h] [--force] [--json]
+  pallium sessions index [--provider all|codex|claude] [--codex-home ~/.codex] [--claude-home ~/.claude] [--include path] [--machine name] [--model text-embedding-3-small] [--safety-buffer 30m] [--since 24h] [--force] [--raw-events] [--json]
   pallium sessions list [--limit 20] [--json]
   pallium sessions search <query> [--limit 10] [--hybrid] [--json]
   pallium sessions related [repo-path] [--file path] [--limit 10] [--json]

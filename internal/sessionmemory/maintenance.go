@@ -36,6 +36,7 @@ type SessionDoctorReport struct {
 	NoisyTitles            int                  `json:"noisy_titles"`
 	OversizedFirstMessages int                  `json:"oversized_first_messages"`
 	SkippedLargeSessions   int                  `json:"skipped_large_sessions"`
+	MissingCapsules        int                  `json:"missing_capsules"`
 	LatestIndexedAt        string               `json:"latest_indexed_at,omitempty"`
 	LatestSessionUpdate    string               `json:"latest_session_update,omitempty"`
 	Healthy                bool                 `json:"healthy"`
@@ -178,6 +179,7 @@ func populateSessionDoctorReport(store *Store, report *SessionDoctorReport) erro
 		{&report.NoisyTitles, `SELECT COUNT(*) FROM codex_sessions WHERE title LIKE '<recommended_plugins>%' OR title LIKE '<!-- pallium:agents:begin -->%' OR title LIKE '# AGENTS.md instructions%'`},
 		{&report.OversizedFirstMessages, `SELECT COUNT(*) FROM codex_sessions WHERE length(first_user_message) > 10000`},
 		{&report.SkippedLargeSessions, `SELECT COUNT(*) FROM codex_sessions WHERE status='skipped_large_rollout'`},
+		{&report.MissingCapsules, `SELECT COUNT(*) FROM codex_sessions s LEFT JOIN codex_session_capsules c ON c.session_id=s.id WHERE c.session_id IS NULL`},
 	}
 	for _, item := range queries {
 		if err := store.db.QueryRow(item.query).Scan(item.dest); err != nil {
@@ -206,7 +208,10 @@ func populateSessionDoctorReport(store *Store, report *SessionDoctorReport) erro
 		report.Issues = append(report.Issues, "Injected context still pollutes searchable session metadata; run a forced sync after upgrading.")
 	}
 	if report.SkippedLargeSessions > 0 {
-		report.Issues = append(report.Issues, "Some oversized transcripts have only metadata coverage.")
+		report.Issues = append(report.Issues, "Some legacy oversized transcripts have only metadata coverage; run a forced sync to replace them with sampled continuity.")
+	}
+	if report.MissingCapsules > 0 {
+		report.Issues = append(report.Issues, "Some sessions do not have continuity capsules; run a forced sync.")
 	}
 	report.Healthy = len(report.Issues) == 0
 	return nil
@@ -223,6 +228,7 @@ func statsFromStore(store *Store) (Stats, error) {
 		{&stats.Messages, `SELECT COUNT(*) FROM codex_session_messages`},
 		{&stats.Chunks, `SELECT COUNT(*) FROM codex_session_chunks`},
 		{&stats.Embeddings, `SELECT COUNT(*) FROM codex_session_embeddings`},
+		{&stats.Capsules, `SELECT COUNT(*) FROM codex_session_capsules`},
 	}
 	for _, item := range queries {
 		if err := store.db.QueryRow(item.query).Scan(item.dest); err != nil {
@@ -336,6 +342,7 @@ func deleteSessionTx(tx *sql.Tx, sessionID string) error {
 		`DELETE FROM codex_session_messages WHERE session_id=?`,
 		`DELETE FROM codex_session_fts WHERE session_id=?`,
 		`DELETE FROM codex_message_fts WHERE session_id=?`,
+		`DELETE FROM codex_session_capsules WHERE session_id=?`,
 		`DELETE FROM codex_sessions WHERE id=?`,
 	}
 	for _, statement := range statements {
