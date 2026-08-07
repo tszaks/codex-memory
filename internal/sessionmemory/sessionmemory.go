@@ -186,11 +186,20 @@ func DefaultClaudeHome() string {
 }
 
 func Open(path string) (*Store, error) {
+	useDefaultPath := path == ""
 	if path == "" {
 		path = DefaultDBPath()
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	_, statErr := os.Stat(dir)
+	directoryCreated := os.IsNotExist(statErr)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
+	}
+	if useDefaultPath || filepath.Clean(path) == filepath.Clean(DefaultDBPath()) || directoryCreated {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("secure session database directory: %w", err)
+		}
 	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -202,7 +211,26 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := hardenDatabaseFiles(path); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return store, nil
+}
+
+func hardenDatabaseFiles(path string) error {
+	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(candidate); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("stat session database file %s: %w", candidate, err)
+		}
+		if err := os.Chmod(candidate, 0o600); err != nil {
+			return fmt.Errorf("secure session database file %s: %w", candidate, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -540,6 +568,7 @@ func (s *Store) upsert(parsed ParsedSession, metadata map[string]any) error {
 	for _, stmt := range []string{
 		"DELETE FROM codex_session_events WHERE session_id=?",
 		"DELETE FROM codex_session_messages WHERE session_id=?",
+		"DELETE FROM codex_session_embeddings WHERE chunk_id IN (SELECT id FROM codex_session_chunks WHERE session_id=?)",
 		"DELETE FROM codex_session_chunks WHERE session_id=?",
 		"DELETE FROM codex_session_fts WHERE session_id=?",
 		"DELETE FROM codex_message_fts WHERE session_id=?",

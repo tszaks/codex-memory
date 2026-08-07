@@ -115,7 +115,7 @@ func Semantic(ctx context.Context, query, model string, limit int, sessionsOnly 
 		return nil, err
 	}
 	defer store.Close()
-	rows, err := store.db.Query(`SELECT e.vector_blob,c.id,c.session_id,c.kind,c.text,s.title,s.cwd,s.updated_at FROM codex_session_embeddings e JOIN codex_session_chunks c ON c.id=e.chunk_id JOIN codex_sessions s ON s.id=c.session_id WHERE e.provider=? AND e.model=?`, provider, model)
+	rows, err := store.db.Query(`SELECT e.vector_blob,c.id,c.session_id,c.kind,c.text,s.title,s.cwd,s.updated_at FROM codex_session_embeddings e JOIN codex_session_chunks c ON c.id=e.chunk_id AND e.text_sha256=c.text_sha256 JOIN codex_sessions s ON s.id=c.session_id WHERE e.provider=? AND e.model=?`, provider, model)
 	if err != nil {
 		return nil, err
 	}

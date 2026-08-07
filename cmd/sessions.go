@@ -45,6 +45,12 @@ func runSessions(out io.Writer, args []string, jsonOutput bool) error {
 		return runSessionsSemantic(out, args[1:], jsonOutput)
 	case "stats":
 		return runSessionsStats(out, args[1:], jsonOutput)
+	case "doctor":
+		return runSessionsDoctor(out, args[1:], jsonOutput)
+	case "forget":
+		return runSessionsForget(out, args[1:], jsonOutput)
+	case "prune":
+		return runSessionsPrune(out, args[1:], jsonOutput)
 	default:
 		printSessionsHelp(out)
 		return fmt.Errorf("unknown sessions command: %s", args[0])
@@ -443,6 +449,162 @@ func runSessionsStats(out io.Writer, args []string, jsonOutput bool) error {
 	return nil
 }
 
+func runSessionsDoctor(out io.Writer, args []string, jsonOutput bool) error {
+	if hasHelpArg(args) {
+		printSessionsHelp(out)
+		return nil
+	}
+	var opts sessionmemory.SessionDoctorOptions
+	fs := newSessionFlagSet("sessions doctor")
+	fs.StringVar(&opts.DBPath, "db", "", "")
+	fs.BoolVar(&opts.Repair, "repair", false, "")
+	fs.BoolVar(&opts.PruneRawEvents, "prune-raw-events", false, "")
+	fs.BoolVar(&opts.Vacuum, "vacuum", false, "")
+	if err := parseSessionFlags(fs, args, map[string]struct{}{"db": {}}, map[string]struct{}{"repair": {}, "prune-raw-events": {}, "vacuum": {}}); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected sessions doctor argument: %s", fs.Arg(0))
+	}
+	if (opts.PruneRawEvents || opts.Vacuum) && !opts.Repair {
+		return fmt.Errorf("--prune-raw-events and --vacuum require --repair")
+	}
+	report, err := sessionmemory.DoctorSessions(opts)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	}
+	renderSessionDoctor(out, report)
+	return nil
+}
+
+func renderSessionDoctor(out io.Writer, report sessionmemory.SessionDoctorReport) {
+	fmt.Fprintln(out, "Session memory doctor")
+	fmt.Fprintf(out, "database: %s\n", report.DBPath)
+	if !report.DBExists {
+		for _, issue := range report.Issues {
+			fmt.Fprintf(out, "issue: %s\n", issue)
+		}
+		return
+	}
+	fmt.Fprintf(out, "storage: %.1f MiB, directory %s, file %s\n", float64(report.DBSizeBytes)/(1024*1024), report.DirectoryMode, report.FileMode)
+	fmt.Fprintf(out, "content: %d sessions, %d messages, %d chunks, %d embeddings\n", report.Stats.Sessions, report.Stats.Messages, report.Stats.Chunks, report.Stats.Embeddings)
+	fmt.Fprintf(out, "integrity: %d orphan embeddings, %d stale embeddings, %d missing embeddings\n", report.OrphanEmbeddings, report.StaleEmbeddings, report.EmbeddingBacklog)
+	fmt.Fprintf(out, "coverage: %d noisy titles, %d oversized first messages, %d skipped large sessions\n", report.NoisyTitles, report.OversizedFirstMessages, report.SkippedLargeSessions)
+	if report.Repair.OrphanEmbeddingsRemoved > 0 || report.Repair.StaleEmbeddingsRemoved > 0 || report.Repair.RawEventsRemoved > 0 || report.Repair.Vacuumed {
+		fmt.Fprintf(out, "repaired: %d orphan embeddings, %d stale embeddings, %d raw events", report.Repair.OrphanEmbeddingsRemoved, report.Repair.StaleEmbeddingsRemoved, report.Repair.RawEventsRemoved)
+		if report.Repair.Vacuumed {
+			fmt.Fprint(out, ", database vacuumed")
+		}
+		fmt.Fprintln(out)
+	}
+	if report.Healthy {
+		fmt.Fprintln(out, "status: healthy")
+		return
+	}
+	for _, issue := range report.Issues {
+		fmt.Fprintf(out, "issue: %s\n", issue)
+	}
+}
+
+func runSessionsForget(out io.Writer, args []string, jsonOutput bool) error {
+	if hasHelpArg(args) {
+		printSessionsHelp(out)
+		return nil
+	}
+	fs := newSessionFlagSet("sessions forget")
+	dbPath := fs.String("db", "", "")
+	confirm := fs.Bool("confirm", false, "")
+	if err := parseSessionFlags(fs, args, map[string]struct{}{"db": {}}, map[string]struct{}{"confirm": {}}); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: pallium sessions forget <session-id> [--confirm]")
+	}
+	result, err := sessionmemory.ForgetSession(*dbPath, fs.Arg(0), *confirm)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+	if result.Deleted {
+		fmt.Fprintf(out, "Forgot session %s: %s\n", result.SessionID, trimText(result.Title, 100))
+		return nil
+	}
+	fmt.Fprintf(out, "Forget preview for %s: %s\n", result.SessionID, trimText(result.Title, 100))
+	fmt.Fprintf(out, "would delete: %d messages, %d chunks, %d embeddings\n", result.Messages, result.Chunks, result.Embeddings)
+	fmt.Fprintln(out, "Preview only. Re-run with --confirm to delete this session from Pallium memory.")
+	return nil
+}
+
+func runSessionsPrune(out io.Writer, args []string, jsonOutput bool) error {
+	if hasHelpArg(args) {
+		printSessionsHelp(out)
+		return nil
+	}
+	fs := newSessionFlagSet("sessions prune")
+	dbPath := fs.String("db", "", "")
+	olderThan := fs.String("older-than", "", "")
+	confirm := fs.Bool("confirm", false, "")
+	if err := parseSessionFlags(fs, args, map[string]struct{}{"db": {}, "older-than": {}}, map[string]struct{}{"confirm": {}}); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 || strings.TrimSpace(*olderThan) == "" {
+		return fmt.Errorf("usage: pallium sessions prune --older-than 180d [--confirm]")
+	}
+	age, err := parseSessionRetentionAge(*olderThan)
+	if err != nil {
+		return err
+	}
+	result, err := sessionmemory.PruneSessions(*dbPath, age, *confirm)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+	if result.Confirmed {
+		fmt.Fprintf(out, "Deleted %d of %d sessions older than %s.\n", result.Deleted, result.Matched, result.Cutoff)
+		return nil
+	}
+	fmt.Fprintf(out, "Retention preview: %d sessions older than %s.\n", result.Matched, result.Cutoff)
+	fmt.Fprintln(out, "Preview only. Re-run with --confirm to delete these sessions from Pallium memory.")
+	return nil
+}
+
+func parseSessionRetentionAge(value string) (time.Duration, error) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	multiplier := time.Duration(1)
+	number := value
+	if strings.HasSuffix(value, "d") {
+		multiplier = 24 * time.Hour
+		number = strings.TrimSuffix(value, "d")
+	} else if strings.HasSuffix(value, "w") {
+		multiplier = 7 * 24 * time.Hour
+		number = strings.TrimSuffix(value, "w")
+	} else {
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration <= 0 {
+			return 0, fmt.Errorf("invalid --older-than duration %q; examples: 180d, 12w, 720h", value)
+		}
+		return duration, nil
+	}
+	count, err := strconv.Atoi(number)
+	if err != nil || count <= 0 {
+		return 0, fmt.Errorf("invalid --older-than duration %q; examples: 180d, 12w, 720h", value)
+	}
+	return time.Duration(count) * multiplier, nil
+}
+
 func printSessionsHelp(out io.Writer) {
 	fmt.Fprintln(out, `pallium sessions
 
@@ -457,7 +619,10 @@ Usage:
   pallium sessions show <session-id> [--transcript] [--json]
   pallium sessions embed [--session id] [--model text-embedding-3-small] [--limit n] [--batch-size n] [--json]
   pallium sessions semantic <query> [--model text-embedding-3-small] [--limit 10] [--json]
-  pallium sessions stats [--json]`)
+  pallium sessions stats [--json]
+  pallium sessions doctor [--db path] [--repair] [--prune-raw-events] [--vacuum] [--json]
+  pallium sessions forget <session-id> [--db path] [--confirm] [--json]
+  pallium sessions prune --older-than 180d [--db path] [--confirm] [--json]`)
 }
 
 func printSessionBrief(out io.Writer, s sessionmemory.Session) {
