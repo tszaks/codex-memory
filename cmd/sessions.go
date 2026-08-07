@@ -112,22 +112,31 @@ func runSessionsLive(out io.Writer, args []string, jsonOutput bool, watch bool) 
 }
 
 func renderLiveSessions(out io.Writer, snapshot *codexsessions.SessionSnapshot, includeAll, details bool) {
-	active, inactive := 0, 0
+	active, idle, inactive := 0, 0, 0
 	for _, s := range snapshot.Sessions {
-		if s.Status == "active" {
+		switch s.Status {
+		case "active":
 			active++
-		} else {
+		case "idle":
+			idle++
+		default:
 			inactive++
 		}
 	}
 	if includeAll {
-		fmt.Fprintf(out, "%d active, %d inactive agent sessions\n", active, inactive)
+		fmt.Fprintf(out, "%d active, %d idle, %d inactive agent sessions\n", active, idle, inactive)
 	} else {
-		fmt.Fprintf(out, "%d active agent sessions\n", active)
+		fmt.Fprintf(out, "%d active, %d idle agent sessions\n", active, idle)
 	}
 	fmt.Fprintf(out, "updated %s\n\n", snapshot.GeneratedAt.Local().Format(time.Kitchen))
+	for _, warning := range snapshot.Warnings {
+		fmt.Fprintf(out, "warning: %s\n", warning)
+	}
+	if len(snapshot.Warnings) > 0 {
+		fmt.Fprintln(out)
+	}
 	if len(snapshot.Sessions) == 0 {
-		fmt.Fprintln(out, "No Codex sessions found.")
+		fmt.Fprintln(out, "No live agent sessions found.")
 		return
 	}
 	for _, s := range snapshot.Sessions {
@@ -135,7 +144,7 @@ func renderLiveSessions(out io.Writer, snapshot *codexsessions.SessionSnapshot, 
 		if s.PID > 0 {
 			pid = strconv.Itoa(s.PID)
 		}
-		fmt.Fprintf(out, "%s %s %s %s %s %s\n", pid, firstNonEmpty(s.TTY, "-"), s.Status, shortID(s.ThreadID), compactPath(s.EffectiveWorkdir), trimText(s.Title, 90))
+		fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", firstNonEmpty(s.Provider, "agent"), pid, firstNonEmpty(s.TTY, "-"), s.Status, shortID(s.ThreadID), compactPath(s.EffectiveWorkdir), trimText(s.Title, 90))
 		if details && s.RecentAction != "" {
 			fmt.Fprintf(out, "  recent: %s\n", s.RecentAction)
 		}
