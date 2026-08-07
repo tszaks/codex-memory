@@ -761,7 +761,11 @@ func (s *Store) grepMessages(expression string, limit int) ([]map[string]any, er
 }
 
 func Show(id string, transcript bool) (Session, []Message, error) {
-	store, err := Open("")
+	return ShowPath("", id, transcript)
+}
+
+func ShowPath(dbPath, id string, transcript bool) (Session, []Message, error) {
+	store, err := Open(dbPath)
 	if err != nil {
 		return Session{}, nil, err
 	}
@@ -776,14 +780,14 @@ func Show(id string, transcript bool) (Session, []Message, error) {
 		return Session{}, nil, err
 	}
 	if !transcript {
-		return sess, nil, nil
+		return sess, []Message{}, nil
 	}
 	rows, err := store.db.Query(`SELECT line_no,timestamp,role,kind,text FROM codex_session_messages WHERE session_id=? ORDER BY line_no`, sid)
 	if err != nil {
 		return Session{}, nil, err
 	}
 	defer rows.Close()
-	var msgs []Message
+	msgs := []Message{}
 	for rows.Next() {
 		var m Message
 		if err := rows.Scan(&m.LineNo, &m.Timestamp, &m.Role, &m.Kind, &m.Text); err != nil {
@@ -792,6 +796,66 @@ func Show(id string, transcript bool) (Session, []Message, error) {
 		msgs = append(msgs, m)
 	}
 	return sess, msgs, rows.Err()
+}
+
+func ReadMessages(dbPath, id string, fromLine, limit int) (Session, []Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	store, err := Open(dbPath)
+	if err != nil {
+		return Session{}, nil, err
+	}
+	defer store.Close()
+	sessionID, err := store.resolveID(id)
+	if err != nil {
+		return Session{}, nil, err
+	}
+	sess, err := store.loadSession(sessionID)
+	if err != nil {
+		return Session{}, nil, err
+	}
+	rows, err := store.db.Query(`SELECT line_no,timestamp,role,kind,text FROM codex_session_messages WHERE session_id=? AND line_no>=? ORDER BY line_no LIMIT ?`, sessionID, max(0, fromLine), limit)
+	if err != nil {
+		return Session{}, nil, err
+	}
+	defer rows.Close()
+	messages := []Message{}
+	for rows.Next() {
+		var message Message
+		if err := rows.Scan(&message.LineNo, &message.Timestamp, &message.Role, &message.Kind, &message.Text); err != nil {
+			return Session{}, nil, err
+		}
+		messages = append(messages, message)
+	}
+	return sess, messages, rows.Err()
+}
+
+type SessionLocation struct {
+	SessionID   string `json:"session_id"`
+	Source      string `json:"source"`
+	RolloutPath string `json:"rollout_path"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+func LocateSession(dbPath, id string) (SessionLocation, error) {
+	store, err := Open(dbPath)
+	if err != nil {
+		return SessionLocation{}, err
+	}
+	defer store.Close()
+	sessionID, err := store.resolveID(id)
+	if err != nil {
+		return SessionLocation{}, err
+	}
+	var location SessionLocation
+	if err := store.db.QueryRow(`SELECT id,COALESCE(source,''),COALESCE(rollout_path,''),COALESCE(NULLIF(updated_at,''),created_at,'') FROM codex_sessions WHERE id=?`, sessionID).Scan(&location.SessionID, &location.Source, &location.RolloutPath, &location.UpdatedAt); err != nil {
+		return SessionLocation{}, err
+	}
+	return location, nil
 }
 
 func StatsRead() (Stats, error) {

@@ -25,6 +25,10 @@ func Embed(ctx context.Context, model string, limit, batchSize int) (int, error)
 }
 
 func EmbedSession(ctx context.Context, sessionID, model string, limit, batchSize int) (int, error) {
+	return EmbedSessionPath(ctx, "", sessionID, model, limit, batchSize, nil)
+}
+
+func EmbedSessionPath(ctx context.Context, dbPath, sessionID, model string, limit, batchSize int, progress func(completed, total int)) (int, error) {
 	model = resolveEmbeddingModel(model)
 	provider := embeddingProvider()
 	if batchSize <= 0 {
@@ -33,7 +37,7 @@ func EmbedSession(ctx context.Context, sessionID, model string, limit, batchSize
 	if limit <= 0 {
 		limit = 1000000
 	}
-	store, err := Open("")
+	store, err := Open(dbPath)
 	if err != nil {
 		return 0, err
 	}
@@ -64,6 +68,9 @@ func EmbedSession(ctx context.Context, sessionID, model string, limit, batchSize
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	if progress != nil {
+		progress(0, len(chunks))
+	}
 	total := 0
 	for i := 0; i < len(chunks); i += batchSize {
 		end := i + batchSize
@@ -84,6 +91,9 @@ func EmbedSession(ctx context.Context, sessionID, model string, limit, batchSize
 				return total, err
 			}
 			total++
+		}
+		if progress != nil {
+			progress(total, len(chunks))
 		}
 	}
 	if sessionID == "" && total < limit {

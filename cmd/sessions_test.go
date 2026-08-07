@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/tszaks/pallium/internal/sessionmemory"
@@ -216,5 +217,70 @@ func TestParseSessionRetentionAge(t *testing.T) {
 	}
 	if _, err := parseSessionRetentionAge("0d"); err == nil {
 		t.Fatal("expected zero age to fail")
+	}
+}
+
+func TestSessionsContinuityCommandsReturnStructuredJSON(t *testing.T) {
+	tmp := t.TempDir()
+	claudeHome := filepath.Join(tmp, ".claude")
+	projectDir := filepath.Join(claudeHome, "projects", "-tmp-repo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath := filepath.Join(projectDir, "continuity-command.jsonl")
+	transcript := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"checkout continuity"},"timestamp":"2026-06-10T12:00:00Z","sessionId":"continuity-command","cwd":"/tmp/repo"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":"Next action: run the smoke test"},"timestamp":"2026-06-10T12:01:00Z","sessionId":"continuity-command","cwd":"/tmp/repo"}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(transcriptPath, []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(transcriptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(tmp, "sessions.sqlite")
+	if _, err := sessionmemory.Index(context.Background(), sessionmemory.Options{DBPath: dbPath, ClaudeHome: claudeHome, Provider: "claude", Force: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var recallOut bytes.Buffer
+	if err := runSessions(&recallOut, []string{"recall", "checkout", "continuity", "--db", dbPath, "--lexical-only"}, true); err != nil {
+		t.Fatal(err)
+	}
+	var recall sessionmemory.RecallReport
+	if err := json.Unmarshal(recallOut.Bytes(), &recall); err != nil {
+		t.Fatalf("invalid recall JSON: %v: %s", err, recallOut.String())
+	}
+	if recall.SessionID != "continuity-command" || recall.NextAction != "run the smoke test" {
+		t.Fatalf("unexpected recall: %+v", recall)
+	}
+
+	var showOut bytes.Buffer
+	if err := runSessions(&showOut, []string{"show", "continuity-command", "--db", dbPath}, true); err != nil {
+		t.Fatal(err)
+	}
+	var show map[string]any
+	if err := json.Unmarshal(showOut.Bytes(), &show); err != nil || show["capsule"] == nil {
+		t.Fatalf("invalid show JSON: %v: %s", err, showOut.String())
+	}
+
+	var readOut bytes.Buffer
+	if err := runSessions(&readOut, []string{"read", "continuity-command", "--db", dbPath, "--limit", "1"}, true); err != nil {
+		t.Fatal(err)
+	}
+	var read map[string]any
+	if err := json.Unmarshal(readOut.Bytes(), &read); err != nil || read["messages"] == nil {
+		t.Fatalf("invalid read JSON: %v: %s", err, readOut.String())
+	}
+
+	var openOut bytes.Buffer
+	if err := runSessions(&openOut, []string{"open", "continuity-command", "--db", dbPath}, true); err != nil {
+		t.Fatal(err)
+	}
+	var location sessionmemory.SessionLocation
+	if err := json.Unmarshal(openOut.Bytes(), &location); err != nil || location.RolloutPath != transcriptPath {
+		t.Fatalf("invalid open JSON: %v: %s", err, openOut.String())
 	}
 }
