@@ -204,6 +204,11 @@ func resolveEmbeddingModel(model string) string {
 // openAICompatibleEmbeddings calls any OpenAI-compatible /v1/embeddings endpoint. The API key is
 // optional, so local runtimes (Ollama, LM Studio, llama.cpp) work without one.
 func openAICompatibleEmbeddings(ctx context.Context, model string, texts []string) ([][]float64, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
 	s := resolveEmbeddingSettings()
 	if s.apiKey == "" && strings.Contains(s.baseURL, "api.openai.com") {
 		return nil, errors.New("OpenAI embeddings require OPENAI_API_KEY or PALLIUM_EMBED_API_KEY; set PALLIUM_EMBED_PROVIDER=ollama (or another local provider) to run without a key")

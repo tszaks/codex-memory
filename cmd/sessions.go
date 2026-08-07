@@ -240,20 +240,55 @@ func runSessionsSearch(out io.Writer, args []string, jsonOutput bool) error {
 	fs := newSessionFlagSet("sessions search")
 	limit := fs.Int("limit", 10, "")
 	hybrid := fs.Bool("hybrid", false, "")
-	if err := parseSessionFlags(fs, args, map[string]struct{}{"limit": {}}, map[string]struct{}{"hybrid": {}}); err != nil {
+	dbPath := fs.String("db", "", "")
+	model := fs.String("model", sessionmemory.DefaultEmbeddingModel, "")
+	source := fs.String("source", "", "")
+	cwd := fs.String("cwd", "", "")
+	repo := fs.String("repo", "", "")
+	since := fs.String("since", "", "")
+	before := fs.String("before", "", "")
+	var files []string
+	fs.Var((*multiStringFlag)(&files), "file", "")
+	if err := parseSessionFlags(fs, args, map[string]struct{}{"limit": {}, "db": {}, "model": {}, "source": {}, "cwd": {}, "repo": {}, "since": {}, "before": {}, "file": {}}, map[string]struct{}{"hybrid": {}}); err != nil {
 		return err
 	}
 	query := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if query == "" {
 		return fmt.Errorf("usage: pallium sessions search <query>")
 	}
-	var results []sessionmemory.SearchResult
-	var err error
-	if *hybrid {
-		results, err = sessionmemory.SearchHybrid(query, *limit)
-	} else {
-		results, err = sessionmemory.Search(query, *limit)
+	opts := sessionmemory.SessionSearchOptions{
+		DBPath: *dbPath,
+		Query:  query,
+		Limit:  *limit,
+		Hybrid: *hybrid,
+		Model:  *model,
+		Source: *source,
+		CWD:    *cwd,
+		Files:  files,
 	}
+	if strings.TrimSpace(*repo) != "" {
+		repoRoot, err := gitlog.RepoRoot(*repo)
+		if err != nil {
+			return err
+		}
+		opts.RepoRoot = repoRoot
+		opts.GitOriginURL, _ = gitlog.OriginURL(repoRoot)
+	}
+	if strings.TrimSpace(*since) != "" {
+		duration, err := parseSessionRetentionAge(*since)
+		if err != nil {
+			return fmt.Errorf("invalid --since: %w", err)
+		}
+		opts.After = time.Now().Add(-duration)
+	}
+	if strings.TrimSpace(*before) != "" {
+		parsed, err := parseSessionSearchDate(*before)
+		if err != nil {
+			return err
+		}
+		opts.Before = parsed
+	}
+	results, err := sessionmemory.SearchWithOptions(context.Background(), opts)
 	if err != nil {
 		return err
 	}
@@ -261,9 +296,19 @@ func runSessionsSearch(out io.Writer, args []string, jsonOutput bool) error {
 		return json.NewEncoder(out).Encode(results)
 	}
 	for _, r := range results {
-		printSessionBrief(out, r.Session)
+		printSessionSearchResult(out, r)
 	}
 	return nil
+}
+
+func parseSessionSearchDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid --before date %q; use YYYY-MM-DD or RFC3339", value)
 }
 
 func runSessionsRelated(out io.Writer, args []string, jsonOutput bool) error {
@@ -614,7 +659,7 @@ Usage:
   pallium sessions watch [--all] [--details]
   pallium sessions index [--provider all|codex|claude] [--codex-home ~/.codex] [--claude-home ~/.claude] [--include path] [--machine name] [--model text-embedding-3-small] [--safety-buffer 30m] [--since 24h] [--force] [--raw-events] [--json]
   pallium sessions list [--limit 20] [--json]
-  pallium sessions search <query> [--limit 10] [--hybrid] [--json]
+  pallium sessions search <query> [--limit 10] [--hybrid] [--repo path] [--cwd path] [--source codex|claude] [--file path] [--since 30d] [--before YYYY-MM-DD] [--model name] [--json]
   pallium sessions related [repo-path] [--file path] [--limit 10] [--json]
   pallium sessions grep <query> [--limit 20] [--json]
   pallium sessions show <session-id> [--transcript] [--json]
@@ -636,13 +681,34 @@ func printSessionBrief(out io.Writer, s sessionmemory.Session) {
 }
 
 func printSessionSearchResult(out io.Writer, r sessionmemory.SearchResult) {
-	fmt.Fprintf(out, "score=%d %s  %s  %s\n", r.Score, firstNonEmpty(r.UpdatedAt, r.CreatedAt), r.ID, r.Title)
+	score := fmt.Sprintf("score=%d", r.Score)
+	if r.HybridScore != 0 {
+		score = fmt.Sprintf("hybrid=%.5f", r.HybridScore)
+	} else if r.SemanticScore != 0 {
+		score = fmt.Sprintf("semantic=%.4f", r.SemanticScore)
+	} else if r.LexicalScore != 0 {
+		score = fmt.Sprintf("lexical=%.4f", r.LexicalScore)
+	}
+	fmt.Fprintf(out, "%s %s  %s  %s\n", score, firstNonEmpty(r.UpdatedAt, r.CreatedAt), r.ID, r.Title)
 	fmt.Fprintf(out, "  cwd: %s\n", r.CWD)
+	if r.Snippet != "" {
+		fmt.Fprintf(out, "  match: %s\n", r.Snippet)
+	}
+	if r.Citation.SessionID != "" {
+		line := ""
+		if r.Citation.LineNo > 0 {
+			line = fmt.Sprintf(":%d", r.Citation.LineNo)
+		}
+		fmt.Fprintf(out, "  citation: %s:%s%s\n", firstNonEmpty(r.Citation.Source, "session"), r.Citation.SessionID, line)
+	}
 	if len(r.Signals) > 0 {
 		fmt.Fprintf(out, "  signals: %s\n", strings.Join(r.Signals, ", "))
 	}
 	if len(r.FilesTouched) > 0 {
 		fmt.Fprintf(out, "  files: %s\n", strings.Join(limitStrings(r.FilesTouched, 8), ", "))
+	}
+	for _, warning := range r.Warnings {
+		fmt.Fprintf(out, "  warning: %s\n", warning)
 	}
 	fmt.Fprintln(out)
 }

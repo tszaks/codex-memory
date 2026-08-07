@@ -137,9 +137,39 @@ type RawEvent struct {
 
 type SearchResult struct {
 	Session
-	Rank    float64  `json:"rank,omitempty"`
-	Score   int      `json:"score,omitempty"`
-	Signals []string `json:"signals,omitempty"`
+	Rank          float64         `json:"rank,omitempty"`
+	Score         int             `json:"score,omitempty"`
+	HybridScore   float64         `json:"hybrid_score,omitempty"`
+	LexicalScore  float64         `json:"lexical_score,omitempty"`
+	SemanticScore float64         `json:"semantic_score,omitempty"`
+	Snippet       string          `json:"snippet,omitempty"`
+	Signals       []string        `json:"signals,omitempty"`
+	Citation      SearchCitation  `json:"citation"`
+	Coverage      SessionCoverage `json:"coverage"`
+	Warnings      []string        `json:"warnings"`
+}
+
+type SearchCitation struct {
+	SessionID   string `json:"session_id"`
+	LineNo      int    `json:"line_no,omitempty"`
+	Source      string `json:"source"`
+	UpdatedAt   string `json:"updated_at"`
+	RolloutPath string `json:"rollout_path,omitempty"`
+}
+
+type SessionSearchOptions struct {
+	DBPath       string
+	Query        string
+	Limit        int
+	Hybrid       bool
+	Model        string
+	Source       string
+	CWD          string
+	RepoRoot     string
+	GitOriginURL string
+	Files        []string
+	After        time.Time
+	Before       time.Time
 }
 
 type SemanticResult struct {
@@ -603,6 +633,7 @@ func (s *Store) upsert(parsed ParsedSession, metadata map[string]any) error {
 	sess = sanitizeSession(sess)
 	parsed.Session = sess
 	parsed.SearchBlob = redact(parsed.SearchBlob)
+	capsule := buildSessionCapsule(parsed)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, stmt := range []string{
 		"DELETE FROM codex_session_events WHERE session_id=?",
@@ -641,7 +672,8 @@ ON CONFLICT(id) DO UPDATE SET machine=excluded.machine,title=excluded.title,firs
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO codex_session_fts(session_id,title,cwd,first_user_message,last_agent_message,files,commands,text) VALUES(?,?,?,?,?,?,?,?)`, sess.ID, sess.Title, sess.CWD, sess.FirstUserMessage, sess.LastAgentMessage, strings.Join(sess.FilesTouched, "\n"), strings.Join(sess.Commands, "\n"), parsed.SearchBlob); err != nil {
+	searchText := strings.Join([]string{parsed.SearchBlob, capsuleSearchText(capsule)}, "\n")
+	if _, err := tx.Exec(`INSERT INTO codex_session_fts(session_id,title,cwd,first_user_message,last_agent_message,files,commands,text) VALUES(?,?,?,?,?,?,?,?)`, sess.ID, sess.Title, sess.CWD, sess.FirstUserMessage, sess.LastAgentMessage, strings.Join(sess.FilesTouched, "\n"), strings.Join(sess.Commands, "\n"), searchText); err != nil {
 		return err
 	}
 	for _, c := range buildChunks(parsed) {
@@ -649,7 +681,6 @@ ON CONFLICT(id) DO UPDATE SET machine=excluded.machine,title=excluded.title,firs
 			return err
 		}
 	}
-	capsule := buildSessionCapsule(parsed)
 	capsuleJSON, err := json.Marshal(capsule)
 	if err != nil {
 		return err
@@ -697,7 +728,22 @@ func Grep(query string, limit int) ([]map[string]any, error) {
 		return nil, err
 	}
 	defer store.Close()
-	rows, err := store.db.Query(`SELECT m.session_id,m.line_no,m.role,m.kind,m.text,s.title FROM codex_message_fts f JOIN codex_session_messages m ON m.session_id=f.session_id AND m.line_no=f.line_no JOIN codex_sessions s ON s.id=m.session_id WHERE codex_message_fts MATCH ? ORDER BY bm25(codex_message_fts) LIMIT ?`, query, limit)
+	terms := uniqueStrings(searchTermPattern.FindAllString(strings.ToLower(query), -1), 24)
+	if len(terms) == 0 {
+		return []map[string]any{}, nil
+	}
+	results, err := store.grepMessages(quotedFTSTerms(terms, " AND "), limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 && len(terms) > 1 {
+		return store.grepMessages(quotedFTSTerms(terms, " OR "), limit)
+	}
+	return results, nil
+}
+
+func (s *Store) grepMessages(expression string, limit int) ([]map[string]any, error) {
+	rows, err := s.db.Query(`SELECT m.session_id,m.line_no,m.role,m.kind,m.text,s.title FROM codex_message_fts f JOIN codex_session_messages m ON m.session_id=f.session_id AND m.line_no=f.line_no JOIN codex_sessions s ON s.id=m.session_id WHERE codex_message_fts MATCH ? ORDER BY bm25(codex_message_fts) LIMIT ?`, expression, limit)
 	if err != nil {
 		return nil, err
 	}
