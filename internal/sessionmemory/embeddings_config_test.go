@@ -138,11 +138,88 @@ func TestConfigureEmbeddingPersistsSecureConfigWithEnvironmentPrecedence(t *test
 	}
 }
 
+func TestKeychainCredentialOverridesAmbientOpenAIKey(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), ".pallium", "embedding.json")
+	t.Setenv("PALLIUM_EMBED_CONFIG", configPath)
+	t.Setenv("PALLIUM_EMBED_PROVIDER", "")
+	t.Setenv("PALLIUM_EMBED_BASE_URL", "")
+	t.Setenv("PALLIUM_EMBED_MODEL", "")
+	t.Setenv("PALLIUM_EMBED_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "ambient-old-key")
+	t.Setenv("OPENAI_ADMIN_API_KEY", "")
+
+	originalLookup := embeddingCredentialLookup
+	t.Cleanup(func() { embeddingCredentialLookup = originalLookup })
+	embeddingCredentialLookup = func(provider string) (string, error) {
+		if provider != "openai" {
+			t.Fatalf("provider=%q, want openai", provider)
+		}
+		return "keychain-current-key", nil
+	}
+
+	status, err := ConfigureEmbedding(EmbeddingConfig{
+		Provider:        "openai",
+		Model:           DefaultEmbeddingModel,
+		CredentialStore: "keychain",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.APIKeyConfigured || status.APIKeySource != "keychain" {
+		t.Fatalf("unexpected credential status: %+v", status)
+	}
+	settings := resolveEmbeddingSettings()
+	if settings.apiKey != "keychain-current-key" {
+		t.Fatal("resolved ambient key instead of keychain credential")
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "keychain-current-key") || strings.Contains(string(raw), "ambient-old-key") {
+		t.Fatal("embedding configuration persisted a credential")
+	}
+}
+
+func TestExplicitPalliumKeyOverridesConfiguredKeychain(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "embedding.json")
+	t.Setenv("PALLIUM_EMBED_CONFIG", configPath)
+	t.Setenv("PALLIUM_EMBED_API_KEY", "one-run-key")
+	if err := writeEmbeddingConfig(configPath, EmbeddingConfig{
+		Provider:        "openai",
+		Model:           DefaultEmbeddingModel,
+		BaseURL:         defaultEmbeddingBaseURL("openai"),
+		CredentialStore: "keychain",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalLookup := embeddingCredentialLookup
+	t.Cleanup(func() { embeddingCredentialLookup = originalLookup })
+	embeddingCredentialLookup = func(string) (string, error) {
+		t.Fatal("keychain should not be read when PALLIUM_EMBED_API_KEY is set")
+		return "", nil
+	}
+
+	settings := resolveEmbeddingSettings()
+	if settings.apiKey != "one-run-key" || settings.apiKeySource != "environment:PALLIUM_EMBED_API_KEY" {
+		t.Fatalf("unexpected explicit override: key=%q source=%q", settings.apiKey, settings.apiKeySource)
+	}
+}
+
 func TestConfigureEmbeddingRejectsUnsafeBaseURL(t *testing.T) {
 	t.Setenv("PALLIUM_EMBED_CONFIG", filepath.Join(t.TempDir(), "embedding.json"))
 	_, err := ConfigureEmbedding(EmbeddingConfig{Provider: "custom", Model: "model", BaseURL: "https://user:secret@example.test/v1"})
 	if err == nil || !strings.Contains(err.Error(), "cannot contain credentials") {
 		t.Fatalf("error=%v, want credential rejection", err)
+	}
+}
+
+func TestConfigureEmbeddingRejectsUnknownCredentialStore(t *testing.T) {
+	t.Setenv("PALLIUM_EMBED_CONFIG", filepath.Join(t.TempDir(), "embedding.json"))
+	_, err := ConfigureEmbedding(EmbeddingConfig{Provider: "openai", Model: DefaultEmbeddingModel, CredentialStore: "plaintext"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported embedding credential store") {
+		t.Fatalf("error=%v, want credential store rejection", err)
 	}
 }
 

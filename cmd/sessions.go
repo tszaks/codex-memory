@@ -820,13 +820,14 @@ func runSessionsEmbedding(out io.Writer, args []string, jsonOutput bool) error {
 		provider := fs.String("provider", "", "")
 		baseURL := fs.String("base-url", "", "")
 		model := fs.String("model", "", "")
-		if err := parseSessionFlags(fs, args, map[string]struct{}{"provider": {}, "base-url": {}, "model": {}}, nil); err != nil {
+		credentialStore := fs.String("credential-store", "", "")
+		if err := parseSessionFlags(fs, args, map[string]struct{}{"provider": {}, "base-url": {}, "model": {}, "credential-store": {}}, nil); err != nil {
 			return err
 		}
 		if fs.NArg() > 0 {
 			return fmt.Errorf("unexpected sessions embedding configure argument: %s", fs.Arg(0))
 		}
-		status, err := sessionmemory.ConfigureEmbedding(sessionmemory.EmbeddingConfig{Provider: *provider, BaseURL: *baseURL, Model: *model})
+		status, err := sessionmemory.ConfigureEmbedding(sessionmemory.EmbeddingConfig{Provider: *provider, BaseURL: *baseURL, Model: *model, CredentialStore: *credentialStore})
 		if err != nil {
 			return err
 		}
@@ -873,8 +874,14 @@ func renderEmbeddingStatus(out io.Writer, status sessionmemory.EmbeddingStatus, 
 	fmt.Fprintf(out, "base URL: %s (%s)\n", status.BaseURL, status.BaseURLSource)
 	fmt.Fprintf(out, "config: %s\n", status.ConfigPath)
 	fmt.Fprintf(out, "API key configured: %t\n", status.APIKeyConfigured)
+	if status.APIKeySource != "" {
+		fmt.Fprintf(out, "API key source: %s\n", status.APIKeySource)
+	}
 	if status.ConfigError != "" {
 		fmt.Fprintf(out, "configuration error: %s\n", status.ConfigError)
+	}
+	if status.CredentialError != "" {
+		fmt.Fprintf(out, "credential error: %s\n", status.CredentialError)
 	}
 	return nil
 }
@@ -1112,7 +1119,7 @@ Usage:
   pallium sessions show <session-id> [--db path] [--transcript] [--json]
   pallium sessions read <session-id> [--db path] [--from-line n] [--limit 50] [--json]
   pallium sessions open <session-id> [--db path] [--launch] [--json]
-  pallium sessions embedding <status|configure|check> [--provider name] [--model name] [--base-url URL] [--json]
+  pallium sessions embedding <status|configure|check> [--provider name] [--model name] [--base-url URL] [--credential-store keychain] [--json]
   pallium sessions embed [--session id] [--db path] [--model text-embedding-3-small] [--limit n] [--batch-size n] [--json]
   pallium sessions semantic <query> [--model text-embedding-3-small] [--limit 10] [--timeout 10s] [--json]
   pallium sessions stats [--json]

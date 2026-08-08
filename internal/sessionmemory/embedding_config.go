@@ -13,9 +13,10 @@ import (
 )
 
 type EmbeddingConfig struct {
-	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	Model    string `json:"model"`
+	Provider        string `json:"provider"`
+	BaseURL         string `json:"base_url"`
+	Model           string `json:"model"`
+	CredentialStore string `json:"credential_store,omitempty"`
 }
 
 type EmbeddingStatus struct {
@@ -28,7 +29,9 @@ type EmbeddingStatus struct {
 	Model            string `json:"model"`
 	ModelSource      string `json:"model_source"`
 	APIKeyConfigured bool   `json:"api_key_configured"`
+	APIKeySource     string `json:"api_key_source,omitempty"`
 	ConfigError      string `json:"config_error,omitempty"`
+	CredentialError  string `json:"credential_error,omitempty"`
 }
 
 type EmbeddingProbeResult struct {
@@ -41,16 +44,18 @@ type EmbeddingProbeResult struct {
 }
 
 type embeddingSettings struct {
-	provider       string
-	baseURL        string
-	model          string
-	apiKey         string
-	providerSource string
-	baseURLSource  string
-	modelSource    string
-	configPath     string
-	configured     bool
-	configError    error
+	provider        string
+	baseURL         string
+	model           string
+	apiKey          string
+	apiKeySource    string
+	providerSource  string
+	baseURLSource   string
+	modelSource     string
+	configPath      string
+	configured      bool
+	configError     error
+	credentialError error
 }
 
 var embeddingProviderNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -97,9 +102,13 @@ func ReadEmbeddingStatus() EmbeddingStatus {
 		Model:            settings.model,
 		ModelSource:      settings.modelSource,
 		APIKeyConfigured: settings.apiKey != "",
+		APIKeySource:     settings.apiKeySource,
 	}
 	if settings.configError != nil {
 		status.ConfigError = settings.configError.Error()
+	}
+	if settings.credentialError != nil {
+		status.CredentialError = settings.credentialError.Error()
 	}
 	return status
 }
@@ -109,6 +118,9 @@ func ProbeEmbedding(ctx context.Context) (EmbeddingProbeResult, error) {
 	result := EmbeddingProbeResult{Provider: settings.provider, BaseURL: settings.baseURL, Model: settings.model}
 	if settings.configError != nil {
 		return result, settings.configError
+	}
+	if settings.credentialError != nil {
+		return result, settings.credentialError
 	}
 	started := time.Now()
 	vectors, err := embedTexts(ctx, settings.model, []string{"Pallium continuity search health check"})
@@ -138,10 +150,22 @@ func resolveEmbeddingSettings() embeddingSettings {
 	settings.baseURL = strings.TrimRight(settings.baseURL, "/")
 
 	settings.apiKey = strings.TrimSpace(os.Getenv("PALLIUM_EMBED_API_KEY"))
-	if settings.apiKey == "" && settings.provider == "openai" {
+	if settings.apiKey != "" {
+		settings.apiKeySource = "environment:PALLIUM_EMBED_API_KEY"
+	} else if config.CredentialStore == "keychain" {
+		settings.apiKey, settings.credentialError = embeddingCredentialLookup(settings.provider)
+		if settings.apiKey != "" {
+			settings.apiKeySource = "keychain"
+		}
+	} else if settings.provider == "openai" {
 		settings.apiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-		if settings.apiKey == "" {
+		if settings.apiKey != "" {
+			settings.apiKeySource = "environment:OPENAI_API_KEY"
+		} else {
 			settings.apiKey = strings.TrimSpace(os.Getenv("OPENAI_ADMIN_API_KEY"))
+			if settings.apiKey != "" {
+				settings.apiKeySource = "environment:OPENAI_ADMIN_API_KEY"
+			}
 		}
 	}
 	return settings
@@ -262,6 +286,7 @@ func normalizeEmbeddingConfig(config EmbeddingConfig) (EmbeddingConfig, error) {
 	config.Provider = strings.ToLower(strings.TrimSpace(config.Provider))
 	config.Model = strings.TrimSpace(config.Model)
 	config.BaseURL = strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
+	config.CredentialStore = strings.ToLower(strings.TrimSpace(config.CredentialStore))
 	if config.Provider == "" {
 		return EmbeddingConfig{}, fmt.Errorf("embedding provider is required")
 	}
@@ -270,6 +295,9 @@ func normalizeEmbeddingConfig(config EmbeddingConfig) (EmbeddingConfig, error) {
 	}
 	if config.Model == "" {
 		return EmbeddingConfig{}, fmt.Errorf("embedding model is required")
+	}
+	if config.CredentialStore != "" && config.CredentialStore != "keychain" {
+		return EmbeddingConfig{}, fmt.Errorf("unsupported embedding credential store %q; use keychain", config.CredentialStore)
 	}
 	if config.BaseURL == "" {
 		config.BaseURL = defaultEmbeddingBaseURL(config.Provider)

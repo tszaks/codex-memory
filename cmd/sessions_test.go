@@ -69,6 +69,34 @@ func TestSessionsEmbeddingConfigurePersistsAndBecomesEmbedDefault(t *testing.T) 
 	}
 }
 
+func TestSessionsEmbeddingConfigureAcceptsKeychain(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), ".pallium", "embedding.json")
+	t.Setenv("PALLIUM_EMBED_CONFIG", configPath)
+	for _, key := range []string{"PALLIUM_EMBED_PROVIDER", "PALLIUM_EMBED_BASE_URL", "PALLIUM_EMBED_MODEL", "PALLIUM_EMBED_API_KEY", "OPENAI_API_KEY", "OPENAI_ADMIN_API_KEY"} {
+		t.Setenv(key, "")
+	}
+
+	var out bytes.Buffer
+	err := runSessions(&out, []string{"embedding", "configure", "--provider", "openai", "--model", "text-embedding-3-small", "--credential-store", "keychain"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status sessionmemory.EmbeddingStatus
+	if err := json.Unmarshal(out.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Provider != "openai" || status.Model != "text-embedding-3-small" || !status.Configured {
+		t.Fatalf("unexpected embedding status: %+v", status)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"credential_store": "keychain"`)) {
+		t.Fatalf("keychain selection not persisted: %s", raw)
+	}
+}
+
 func TestSessionsIndexRejectsUnknownFlag(t *testing.T) {
 	var out bytes.Buffer
 	err := runSessionsIndex(&out, []string{"--bogus"}, false)
