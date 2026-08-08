@@ -2,6 +2,10 @@ package sessionmemory
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -83,6 +87,28 @@ func TestResolveEmbeddingModel(t *testing.T) {
 	// An explicit override always wins over the environment default.
 	if got := resolveEmbeddingModel("nomic-embed-text"); got != "nomic-embed-text" {
 		t.Errorf("override model = %q, want nomic-embed-text", got)
+	}
+}
+
+func TestEmbeddingCreditExhaustionFailsWithoutRetrying(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"type":"insufficient_quota","code":"credit_balance_exhausted","message":"Add credits."}}`))
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("PALLIUM_EMBED_PROVIDER", "openai")
+	t.Setenv("PALLIUM_EMBED_BASE_URL", server.URL)
+	t.Setenv("PALLIUM_EMBED_API_KEY", "test-key")
+
+	_, err := openAICompatibleEmbeddings(context.Background(), DefaultEmbeddingModel, []string{"probe"})
+	if err == nil || !strings.Contains(err.Error(), "credit_balance_exhausted") {
+		t.Fatalf("error=%v, want actionable credit exhaustion", err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("requests=%d, want one non-retried request", requests.Load())
 	}
 }
 

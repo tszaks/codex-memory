@@ -246,6 +246,9 @@ func openAICompatibleEmbeddings(ctx context.Context, model string, texts []strin
 		if resp.StatusCode < 300 {
 			break
 		}
+		if permanentEmbeddingFailure(payload) {
+			return nil, fmt.Errorf("%s embeddings failed: %s: %s", s.provider, resp.Status, short(string(payload), 500))
+		}
 		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
 			return nil, fmt.Errorf("%s embeddings failed: %s: %s", s.provider, resp.Status, short(string(payload), 500))
 		}
@@ -254,7 +257,7 @@ func openAICompatibleEmbeddings(ctx context.Context, model string, texts []strin
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("%s embeddings failed: %s: %s", s.provider, status, short(string(payload), 500))
 		case <-timer.C:
 		}
 	}
@@ -274,6 +277,19 @@ func openAICompatibleEmbeddings(ctx context.Context, model string, texts []strin
 		out[i] = item.Embedding
 	}
 	return out, nil
+}
+
+func permanentEmbeddingFailure(payload []byte) bool {
+	var decoded struct {
+		Error struct {
+			Type string `json:"type"`
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(payload, &decoded) != nil {
+		return false
+	}
+	return decoded.Error.Type == "insufficient_quota" || decoded.Error.Code == "credit_balance_exhausted"
 }
 
 func retryDelay(retryAfter, payload string, attempt int) time.Duration {
