@@ -41,14 +41,31 @@ func (s *Store) backfillLegacySessions() (int, error) {
 		if err != nil {
 			return backfilled, err
 		}
-		sess.FirstUserMessage = short(normalizeUserText(sess.FirstUserMessage), maxStoredFirstUserText)
-		sess.Title = short(first(normalizeUserText(sess.Title), sess.FirstUserMessage, "Session "+short(sess.ID, 12)), 240)
+		messagesSeen := len(messages)
+		cleanMessages := make([]Message, 0, len(messages))
+		firstRealUserMessage := ""
+		for _, message := range messages {
+			if message.Role == "user" {
+				message.Text = capMessageText(normalizeUserText(message.Text))
+				if message.Text == "" {
+					continue
+				}
+				if firstRealUserMessage == "" {
+					firstRealUserMessage = short(message.Text, maxStoredFirstUserText)
+				}
+			}
+			cleanMessages = append(cleanMessages, message)
+		}
+		messages = cleanMessages
+		sess.FirstUserMessage = short(first(normalizeUserText(sess.FirstUserMessage), firstRealUserMessage), maxStoredFirstUserText)
+		sess.Title = short(first(normalizeUserText(sess.Title), sess.FirstUserMessage, firstRealUserMessage, "Session "+short(sess.ID, 12)), 240)
 		sess.LastAgentMessage = capMessageText(sess.LastAgentMessage)
 		coverage := SessionCoverage{
-			Mode:           "legacy",
-			MessagesSeen:   len(messages),
-			MessagesStored: len(messages),
-			Warning:        "Continuity was rebuilt from previously indexed messages because the original source transcript was unavailable during sync.",
+			Mode:            "legacy",
+			MessagesSeen:    messagesSeen,
+			MessagesStored:  len(messages),
+			MessagesDropped: messagesSeen - len(messages),
+			Warning:         "Continuity was rebuilt from previously indexed messages because the original source transcript was unavailable during sync.",
 		}
 		if len(messages) > largeTranscriptHeadMessages+largeTranscriptTailMessages {
 			coverage.Mode = "sampled"

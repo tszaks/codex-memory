@@ -26,6 +26,15 @@ Fix the checkout regression and verify it.`
 	if got := normalizeUserText("Explain <environment_context> to me"); got != "Explain <environment_context> to me" {
 		t.Fatalf("ordinary user text changed: %q", got)
 	}
+	if got := normalizeUserText("# AGENTS.md instructions for /repo"); got != "" {
+		t.Fatalf("standalone agent instructions survived normalization: %q", got)
+	}
+	if got := normalizeUserText("# AGENTS.md instructions for /repo\nShip the release."); got != "Ship the release." {
+		t.Fatalf("ask after agent instructions was lost: %q", got)
+	}
+	if got := normalizeUserText("<!-- pallium:agents:begin --> truncated injected context"); got != "" {
+		t.Fatalf("truncated Pallium context survived normalization: %q", got)
+	}
 }
 
 func TestParseLargeRolloutKeepsBoundedFirstAndLastContinuity(t *testing.T) {

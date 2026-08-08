@@ -18,6 +18,7 @@ func TestBackfillLegacySessionsRebuildsMissingContinuity(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, message := range []Message{
+		{LineNo: 0, Role: "user", Kind: "message", Text: "# AGENTS.md instructions for /repo"},
 		{LineNo: 1, Role: "user", Kind: "message", Text: "Recover the old checkout task"},
 		{LineNo: 2, Role: "assistant", Kind: "message", Text: "Next action: run the smoke test"},
 	} {
@@ -41,6 +42,13 @@ func TestBackfillLegacySessionsRebuildsMissingContinuity(t *testing.T) {
 	}
 	if sess.Title != "Recover the old checkout task" || sess.FirstUserMessage != "Recover the old checkout task" || sess.Status != "legacy_recovered" {
 		t.Fatalf("legacy metadata was not normalized: %+v", sess)
+	}
+	var noisyMessages int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_messages WHERE session_id='legacy-session' AND text LIKE '# AGENTS.md instructions%'`).Scan(&noisyMessages); err != nil {
+		t.Fatal(err)
+	}
+	if noisyMessages != 0 {
+		t.Fatalf("legacy injected messages remain: %d", noisyMessages)
 	}
 	var rawEvents int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_events WHERE session_id='legacy-session'`).Scan(&rawEvents); err != nil {

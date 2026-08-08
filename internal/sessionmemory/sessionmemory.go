@@ -1306,14 +1306,15 @@ func normalizeUserText(s string) string {
 	}
 	var lines []string
 	for _, line := range strings.Split(t, "\n") {
-		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "# agents.md instructions", "# codex loader note":
+		trimmed := strings.ToLower(strings.TrimSpace(line))
+		switch {
+		case strings.HasPrefix(trimmed, "# agents.md instructions"), trimmed == "# codex loader note":
 			continue
 		}
 		lines = append(lines, line)
 	}
 	t = strings.TrimSpace(strings.Join(lines, "\n"))
-	for _, prefix := range []string{"<recommended_plugins>", "<environment_context>", "<permissions instructions>", "<apps_instructions>", "<instructions>"} {
+	for _, prefix := range []string{"<recommended_plugins>", "<environment_context>", "<permissions instructions>", "<apps_instructions>", "<instructions>", "<!-- pallium:agents:begin -->"} {
 		if strings.HasPrefix(strings.ToLower(t), prefix) {
 			return ""
 		}
