@@ -177,7 +177,7 @@ func populateSessionDoctorReport(store *Store, report *SessionDoctorReport) erro
 		{&report.OrphanEmbeddings, `SELECT COUNT(*) FROM codex_session_embeddings e LEFT JOIN codex_session_chunks c ON c.id=e.chunk_id WHERE c.id IS NULL`},
 		{&report.StaleEmbeddings, `SELECT COUNT(*) FROM codex_session_embeddings e JOIN codex_session_chunks c ON c.id=e.chunk_id WHERE e.text_sha256 != c.text_sha256`},
 		{&report.StoredRawEvents, `SELECT COUNT(*) FROM codex_session_events`},
-		{&report.NoisyTitles, `SELECT COUNT(*) FROM codex_sessions WHERE title LIKE '<recommended_plugins>%' OR title LIKE '<!-- pallium:agents:begin -->%' OR title LIKE '# AGENTS.md instructions%'`},
+		{&report.NoisyTitles, `SELECT COUNT(*) FROM codex_sessions WHERE title LIKE '<recommended_plugins>%' OR title LIKE '<!-- pallium:agents:begin -->%' OR title LIKE '# AGENTS.md instructions%' OR lower(title) LIKE 'the following is the codex agent history whose request action you are assessing.%'`},
 		{&report.OversizedFirstMessages, `SELECT COUNT(*) FROM codex_sessions WHERE length(first_user_message) > 10000`},
 		{&report.SkippedLargeSessions, `SELECT COUNT(*) FROM codex_sessions WHERE status='skipped_large_rollout'`},
 		{&report.MissingCapsules, `SELECT COUNT(*) FROM codex_sessions s LEFT JOIN codex_session_capsules c ON c.session_id=s.id WHERE c.session_id IS NULL`},

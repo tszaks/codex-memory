@@ -1292,6 +1292,7 @@ func normalizeUserText(s string) string {
 		"<instructions>",
 		"# agents.md instructions",
 		"<!-- pallium:agents:begin -->",
+		"the following is the codex agent history whose request action you are assessing.",
 	} {
 		if strings.HasPrefix(lower, prefix) {
 			startsWithInjectedContext = true
@@ -1314,7 +1315,7 @@ func normalizeUserText(s string) string {
 		lines = append(lines, line)
 	}
 	t = strings.TrimSpace(strings.Join(lines, "\n"))
-	for _, prefix := range []string{"<recommended_plugins>", "<environment_context>", "<permissions instructions>", "<apps_instructions>", "<instructions>", "<!-- pallium:agents:begin -->"} {
+	for _, prefix := range []string{"<recommended_plugins>", "<environment_context>", "<permissions instructions>", "<apps_instructions>", "<instructions>", "<!-- pallium:agents:begin -->", "the following is the codex agent history whose request action you are assessing."} {
 		if strings.HasPrefix(strings.ToLower(t), prefix) {
 			return ""
 		}

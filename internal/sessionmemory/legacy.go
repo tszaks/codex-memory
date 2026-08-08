@@ -15,6 +15,7 @@ func (s *Store) backfillLegacySessions() (int, error) {
 			OR s.title LIKE '<recommended_plugins>%'
 			OR s.title LIKE '<!-- pallium:agents:begin -->%'
 			OR s.title LIKE '# AGENTS.md instructions%'
+			OR lower(s.title) LIKE 'the following is the codex agent history whose request action you are assessing.%'
 			OR length(s.first_user_message)>10000
 			OR s.status='skipped_large_rollout'
 			OR c.schema_version < ?

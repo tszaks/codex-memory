@@ -246,8 +246,8 @@ func openAICompatibleEmbeddings(ctx context.Context, model string, texts []strin
 		if resp.StatusCode < 300 {
 			break
 		}
-		if permanentEmbeddingFailure(payload) {
-			return nil, fmt.Errorf("%s embeddings failed: %s: %s", s.provider, resp.Status, short(string(payload), 500))
+		if summary, permanent := permanentEmbeddingFailure(payload); permanent {
+			return nil, fmt.Errorf("%s embeddings failed: %s: %s", s.provider, resp.Status, summary)
 		}
 		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
 			return nil, fmt.Errorf("%s embeddings failed: %s: %s", s.provider, resp.Status, short(string(payload), 500))
@@ -279,17 +279,22 @@ func openAICompatibleEmbeddings(ctx context.Context, model string, texts []strin
 	return out, nil
 }
 
-func permanentEmbeddingFailure(payload []byte) bool {
+func permanentEmbeddingFailure(payload []byte) (string, bool) {
 	var decoded struct {
 		Error struct {
-			Type string `json:"type"`
-			Code string `json:"code"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if json.Unmarshal(payload, &decoded) != nil {
-		return false
+		return "", false
 	}
-	return decoded.Error.Type == "insufficient_quota" || decoded.Error.Code == "credit_balance_exhausted"
+	permanent := decoded.Error.Type == "insufficient_quota" || decoded.Error.Code == "credit_balance_exhausted"
+	if !permanent {
+		return "", false
+	}
+	return short(strings.TrimSpace(decoded.Error.Code+": "+decoded.Error.Message), 500), true
 }
 
 func retryDelay(retryAfter, payload string, attempt int) time.Duration {
