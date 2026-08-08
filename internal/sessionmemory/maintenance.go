@@ -29,6 +29,7 @@ type SessionDoctorReport struct {
 	DirectoryMode          string               `json:"directory_mode,omitempty"`
 	FileMode               string               `json:"file_mode,omitempty"`
 	Stats                  Stats                `json:"stats"`
+	Embedding              EmbeddingStatus      `json:"embedding"`
 	EmbeddingBacklog       int                  `json:"embedding_backlog"`
 	OrphanEmbeddings       int                  `json:"orphan_embeddings"`
 	StaleEmbeddings        int                  `json:"stale_embeddings"`
@@ -166,7 +167,8 @@ func populateSessionDoctorReport(store *Store, report *SessionDoctorReport) erro
 		return err
 	}
 	report.Stats = stats
-	report.EmbeddingBacklog, err = store.embeddingBacklog(DefaultEmbeddingModel)
+	report.Embedding = ReadEmbeddingStatus()
+	report.EmbeddingBacklog, err = store.embeddingBacklog(report.Embedding.Model)
 	if err != nil {
 		return err
 	}
@@ -207,6 +209,9 @@ func populateSessionDoctorReport(store *Store, report *SessionDoctorReport) erro
 	}
 	if report.EmbeddingBacklog > 0 {
 		report.Issues = append(report.Issues, "Session embeddings are not fully caught up.")
+	}
+	if report.Embedding.ConfigError != "" {
+		report.Issues = append(report.Issues, "Embedding configuration is invalid: "+report.Embedding.ConfigError)
 	}
 	if report.NoisyTitles > 0 || report.OversizedFirstMessages > 0 {
 		report.Issues = append(report.Issues, "Injected context still pollutes searchable session metadata; run a forced sync after upgrading.")

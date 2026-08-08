@@ -12,7 +12,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -158,59 +157,6 @@ func Semantic(ctx context.Context, query, model string, limit int, sessionsOnly 
 	return out, nil
 }
 
-// embeddingSettings is the resolved embedding provider configuration for the current process.
-type embeddingSettings struct {
-	provider string
-	baseURL  string
-	apiKey   string
-}
-
-// resolveEmbeddingSettings reads the active embedding provider from the environment so a user can
-// bring their own key against any OpenAI-compatible host, or run fully local with no key at all.
-// The embedding ecosystem largely standardized on the OpenAI /v1/embeddings wire format (OpenAI,
-// Ollama, LM Studio, llama.cpp, vLLM, Together, Mistral, Jina, OpenRouter, ...), so one
-// configurable client covers "as many models as possible" without a bespoke adapter per provider.
-func resolveEmbeddingSettings() embeddingSettings {
-	provider := strings.TrimSpace(os.Getenv("PALLIUM_EMBED_PROVIDER"))
-	if provider == "" {
-		provider = "openai"
-	}
-	baseURL := strings.TrimSpace(os.Getenv("PALLIUM_EMBED_BASE_URL"))
-	if baseURL == "" {
-		if provider == "ollama" {
-			baseURL = "http://localhost:11434/v1"
-		} else {
-			baseURL = "https://api.openai.com/v1"
-		}
-	}
-	apiKey := strings.TrimSpace(os.Getenv("PALLIUM_EMBED_API_KEY"))
-	if apiKey == "" && provider == "openai" {
-		apiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-		if apiKey == "" {
-			apiKey = strings.TrimSpace(os.Getenv("OPENAI_ADMIN_API_KEY"))
-		}
-	}
-	return embeddingSettings{provider: provider, baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey}
-}
-
-// embeddingProvider is the label embeddings are stored and queried under. A similarity search only
-// compares vectors within one (provider, model) space, since embeddings from different models live
-// in different vector spaces and are not comparable. Switching providers/models re-embeds the
-// backlog rather than mixing spaces.
-func embeddingProvider() string { return resolveEmbeddingSettings().provider }
-
-// resolveEmbeddingModel applies the explicit model override, then PALLIUM_EMBED_MODEL, then the
-// built-in default.
-func resolveEmbeddingModel(model string) string {
-	if strings.TrimSpace(model) != "" {
-		return model
-	}
-	if env := strings.TrimSpace(os.Getenv("PALLIUM_EMBED_MODEL")); env != "" {
-		return env
-	}
-	return DefaultEmbeddingModel
-}
-
 // openAICompatibleEmbeddings calls any OpenAI-compatible /v1/embeddings endpoint. The API key is
 // optional, so local runtimes (Ollama, LM Studio, llama.cpp) work without one.
 func openAICompatibleEmbeddings(ctx context.Context, model string, texts []string) ([][]float64, error) {
@@ -220,6 +166,9 @@ func openAICompatibleEmbeddings(ctx context.Context, model string, texts []strin
 		defer cancel()
 	}
 	s := resolveEmbeddingSettings()
+	if s.configError != nil {
+		return nil, s.configError
+	}
 	if s.apiKey == "" && strings.Contains(s.baseURL, "api.openai.com") {
 		return nil, errors.New("OpenAI embeddings require OPENAI_API_KEY or PALLIUM_EMBED_API_KEY; set PALLIUM_EMBED_PROVIDER=ollama (or another local provider) to run without a key")
 	}

@@ -506,10 +506,7 @@ func (s *Store) indexCutoff(opts Options) time.Time {
 	if opts.Since > 0 {
 		return time.Now().Add(-opts.Since)
 	}
-	model := strings.TrimSpace(opts.EmbeddingModel)
-	if model == "" {
-		model = DefaultEmbeddingModel
-	}
+	model := resolveEmbeddingModel(opts.EmbeddingModel)
 	cursor := s.embeddingCursor(model)
 	if cursor.IsZero() {
 		return time.Time{}
@@ -936,9 +933,7 @@ func StatsReadPath(path string) (Stats, error) {
 }
 
 func EmbeddingBacklogPath(path, model string) (int, error) {
-	if model == "" {
-		model = DefaultEmbeddingModel
-	}
+	model = resolveEmbeddingModel(model)
 	store, err := Open(path)
 	if err != nil {
 		return 0, err

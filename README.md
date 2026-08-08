@@ -110,6 +110,9 @@ line instead of returning entire conversations.
 
 ```bash
 pallium sessions sync
+pallium sessions embedding status
+pallium sessions embedding configure --provider ollama --model embeddinggemma
+pallium sessions embedding check
 pallium sessions recall "where did the checkout migration stop?" --repo .
 pallium sessions search "production smoke test" --hybrid --source codex
 pallium sessions show <session-id>
@@ -123,6 +126,11 @@ capsules, and catches up embeddings when a provider is configured. It
 automatically performs a full upgrade pass when it detects legacy noisy titles,
 metadata-only large sessions, or missing capsules. Raw provider events are not
 stored unless `--raw-events` is explicitly supplied.
+
+`sessions embedding configure` saves the provider, OpenAI-compatible base URL,
+and model in `~/.pallium/embedding.json` with mode `0600`. Environment variables
+still take precedence, and API keys remain environment-only. Use `sessions
+embedding check` to verify the active vector space before a large embed.
 
 `sessions recall` uses BM25 plus current embeddings when available. If semantic
 retrieval is unavailable or times out, it returns lexical evidence and says so.

@@ -37,6 +37,38 @@ func TestSessionsEmbedHelpDoesNotStartEmbedding(t *testing.T) {
 	}
 }
 
+func TestSessionsEmbeddingConfigurePersistsAndBecomesEmbedDefault(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), ".pallium", "embedding.json")
+	t.Setenv("PALLIUM_EMBED_CONFIG", configPath)
+	for _, key := range []string{"PALLIUM_EMBED_PROVIDER", "PALLIUM_EMBED_BASE_URL", "PALLIUM_EMBED_MODEL", "PALLIUM_EMBED_API_KEY", "OPENAI_API_KEY", "OPENAI_ADMIN_API_KEY"} {
+		t.Setenv(key, "")
+	}
+	var out bytes.Buffer
+	if err := runSessions(&out, []string{"embedding", "configure", "--provider", "ollama", "--model", "embeddinggemma"}, true); err != nil {
+		t.Fatal(err)
+	}
+	var status sessionmemory.EmbeddingStatus
+	if err := json.Unmarshal(out.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Provider != "ollama" || status.Model != "embeddinggemma" || status.ProviderSource != "config" {
+		t.Fatalf("unexpected configured status: %+v", status)
+	}
+
+	out.Reset()
+	dbPath := filepath.Join(t.TempDir(), "sessions.sqlite")
+	if err := runSessions(&out, []string{"embed", "--db", dbPath, "--limit", "1"}, true); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["model"] != "embeddinggemma" || payload["embedded"] != float64(0) {
+		t.Fatalf("saved model did not become embed default: %v", payload)
+	}
+}
+
 func TestSessionsIndexRejectsUnknownFlag(t *testing.T) {
 	var out bytes.Buffer
 	err := runSessionsIndex(&out, []string{"--bogus"}, false)

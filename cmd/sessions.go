@@ -51,6 +51,8 @@ func runSessions(out io.Writer, args []string, jsonOutput bool) error {
 		return runSessionsRecall(out, args[1:], jsonOutput)
 	case "embed":
 		return runSessionsEmbed(out, args[1:], jsonOutput)
+	case "embedding":
+		return runSessionsEmbedding(out, args[1:], jsonOutput)
 	case "semantic":
 		return runSessionsSemantic(out, args[1:], jsonOutput)
 	case "stats":
@@ -192,7 +194,7 @@ func runSessionsIndex(out io.Writer, args []string, jsonOutput bool) error {
 	fs.StringVar(&opts.Provider, "provider", "", "")
 	fs.StringVar(&opts.DBPath, "db", "", "")
 	fs.StringVar(&opts.Machine, "machine", "", "")
-	fs.StringVar(&opts.EmbeddingModel, "model", sessionmemory.DefaultEmbeddingModel, "")
+	fs.StringVar(&opts.EmbeddingModel, "model", "", "")
 	since := fs.String("since", "", "")
 	safetyBuffer := fs.String("safety-buffer", "30m", "")
 	fs.BoolVar(&opts.Force, "force", false, "")
@@ -238,7 +240,7 @@ func runSessionsSync(out io.Writer, args []string, jsonOutput bool) error {
 	fs.StringVar(&opts.Index.Provider, "provider", "", "")
 	fs.StringVar(&opts.Index.DBPath, "db", "", "")
 	fs.StringVar(&opts.Index.Machine, "machine", "", "")
-	fs.StringVar(&opts.Index.EmbeddingModel, "model", sessionmemory.DefaultEmbeddingModel, "")
+	fs.StringVar(&opts.Index.EmbeddingModel, "model", "", "")
 	since := fs.String("since", "", "")
 	safetyBuffer := fs.String("safety-buffer", "30m", "")
 	timeout := fs.String("timeout", "", "")
@@ -354,7 +356,7 @@ func runSessionsSearch(out io.Writer, args []string, jsonOutput bool) error {
 	limit := fs.Int("limit", 10, "")
 	hybrid := fs.Bool("hybrid", false, "")
 	dbPath := fs.String("db", "", "")
-	model := fs.String("model", sessionmemory.DefaultEmbeddingModel, "")
+	model := fs.String("model", "", "")
 	source := fs.String("source", "", "")
 	cwd := fs.String("cwd", "", "")
 	repo := fs.String("repo", "", "")
@@ -432,7 +434,7 @@ func runSessionsRecall(out io.Writer, args []string, jsonOutput bool) error {
 	fs := newSessionFlagSet("sessions recall")
 	limit := fs.Int("limit", 5, "")
 	dbPath := fs.String("db", "", "")
-	model := fs.String("model", sessionmemory.DefaultEmbeddingModel, "")
+	model := fs.String("model", "", "")
 	source := fs.String("source", "", "")
 	cwd := fs.String("cwd", "", "")
 	repo := fs.String("repo", "", "")
@@ -757,7 +759,7 @@ func runSessionsEmbed(out io.Writer, args []string, jsonOutput bool) error {
 		return nil
 	}
 	fs := newSessionFlagSet("sessions embed")
-	model := fs.String("model", sessionmemory.DefaultEmbeddingModel, "")
+	model := fs.String("model", "", "")
 	limit := fs.Int("limit", 1000000, "")
 	batch := fs.Int("batch-size", 64, "")
 	sessionID := fs.String("session", "", "")
@@ -782,11 +784,99 @@ func runSessionsEmbed(out io.Writer, args []string, jsonOutput bool) error {
 	if err != nil {
 		return err
 	}
-	payload := map[string]any{"embedded": count, "model": *model}
+	resolvedModel := strings.TrimSpace(*model)
+	if resolvedModel == "" {
+		resolvedModel = sessionmemory.ActiveEmbeddingModel()
+	}
+	payload := map[string]any{"embedded": count, "model": resolvedModel}
 	if *sessionID != "" {
 		payload["session_id"] = *sessionID
 	}
-	return writeMaybeJSON(out, jsonOutput, payload, fmt.Sprintf("Embedded %d session chunks with %s", count, *model))
+	return writeMaybeJSON(out, jsonOutput, payload, fmt.Sprintf("Embedded %d session chunks with %s", count, resolvedModel))
+}
+
+func runSessionsEmbedding(out io.Writer, args []string, jsonOutput bool) error {
+	if hasHelpArg(args) {
+		printSessionsHelp(out)
+		return nil
+	}
+	action := "status"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		action = args[0]
+		args = args[1:]
+	}
+	switch action {
+	case "status":
+		fs := newSessionFlagSet("sessions embedding status")
+		if err := parseSessionFlags(fs, args, nil, nil); err != nil {
+			return err
+		}
+		if fs.NArg() > 0 {
+			return fmt.Errorf("unexpected sessions embedding status argument: %s", fs.Arg(0))
+		}
+		return renderEmbeddingStatus(out, sessionmemory.ReadEmbeddingStatus(), jsonOutput)
+	case "configure":
+		fs := newSessionFlagSet("sessions embedding configure")
+		provider := fs.String("provider", "", "")
+		baseURL := fs.String("base-url", "", "")
+		model := fs.String("model", "", "")
+		if err := parseSessionFlags(fs, args, map[string]struct{}{"provider": {}, "base-url": {}, "model": {}}, nil); err != nil {
+			return err
+		}
+		if fs.NArg() > 0 {
+			return fmt.Errorf("unexpected sessions embedding configure argument: %s", fs.Arg(0))
+		}
+		status, err := sessionmemory.ConfigureEmbedding(sessionmemory.EmbeddingConfig{Provider: *provider, BaseURL: *baseURL, Model: *model})
+		if err != nil {
+			return err
+		}
+		return renderEmbeddingStatus(out, status, jsonOutput)
+	case "check":
+		fs := newSessionFlagSet("sessions embedding check")
+		timeout := fs.String("timeout", "2m", "")
+		if err := parseSessionFlags(fs, args, map[string]struct{}{"timeout": {}}, nil); err != nil {
+			return err
+		}
+		if fs.NArg() > 0 {
+			return fmt.Errorf("unexpected sessions embedding check argument: %s", fs.Arg(0))
+		}
+		duration, err := time.ParseDuration(*timeout)
+		if err != nil || duration <= 0 {
+			return fmt.Errorf("invalid --timeout duration %q", *timeout)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), duration)
+		defer cancel()
+		result, err := sessionmemory.ProbeEmbedding(ctx)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			enc := json.NewEncoder(out)
+			enc.SetIndent("", "  ")
+			return enc.Encode(result)
+		}
+		fmt.Fprintf(out, "healthy: %s/%s returned %d dimensions in %s\n", result.Provider, result.Model, result.Dimension, result.Duration)
+		return nil
+	default:
+		return fmt.Errorf("unknown sessions embedding command %q; use status, configure, or check", action)
+	}
+}
+
+func renderEmbeddingStatus(out io.Writer, status sessionmemory.EmbeddingStatus, jsonOutput bool) error {
+	if jsonOutput {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(status)
+	}
+	fmt.Fprintf(out, "provider: %s (%s)\n", status.Provider, status.ProviderSource)
+	fmt.Fprintf(out, "model: %s (%s)\n", status.Model, status.ModelSource)
+	fmt.Fprintf(out, "base URL: %s (%s)\n", status.BaseURL, status.BaseURLSource)
+	fmt.Fprintf(out, "config: %s\n", status.ConfigPath)
+	fmt.Fprintf(out, "API key configured: %t\n", status.APIKeyConfigured)
+	if status.ConfigError != "" {
+		fmt.Fprintf(out, "configuration error: %s\n", status.ConfigError)
+	}
+	return nil
 }
 
 func runSessionsSemantic(out io.Writer, args []string, jsonOutput bool) error {
@@ -795,7 +885,7 @@ func runSessionsSemantic(out io.Writer, args []string, jsonOutput bool) error {
 		return nil
 	}
 	fs := newSessionFlagSet("sessions semantic")
-	model := fs.String("model", sessionmemory.DefaultEmbeddingModel, "")
+	model := fs.String("model", "", "")
 	limit := fs.Int("limit", 10, "")
 	timeout := fs.String("timeout", "10s", "")
 	if err := parseSessionFlags(fs, args, map[string]struct{}{"model": {}, "limit": {}, "timeout": {}}, nil); err != nil {
@@ -1022,6 +1112,7 @@ Usage:
   pallium sessions show <session-id> [--db path] [--transcript] [--json]
   pallium sessions read <session-id> [--db path] [--from-line n] [--limit 50] [--json]
   pallium sessions open <session-id> [--db path] [--launch] [--json]
+  pallium sessions embedding <status|configure|check> [--provider name] [--model name] [--base-url URL] [--json]
   pallium sessions embed [--session id] [--db path] [--model text-embedding-3-small] [--limit n] [--batch-size n] [--json]
   pallium sessions semantic <query> [--model text-embedding-3-small] [--limit 10] [--timeout 10s] [--json]
   pallium sessions stats [--json]
