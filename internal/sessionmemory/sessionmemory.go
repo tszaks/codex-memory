@@ -634,11 +634,14 @@ func (s *Store) upsert(parsed ParsedSession, metadata map[string]any) error {
 	parsed.Session = sess
 	parsed.SearchBlob = redact(parsed.SearchBlob)
 	capsule := buildSessionCapsule(parsed)
+	chunks := buildChunks(parsed)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := removeChangedSessionEmbeddings(tx, sess.ID, chunks); err != nil {
+		return err
+	}
 	for _, stmt := range []string{
 		"DELETE FROM codex_session_events WHERE session_id=?",
 		"DELETE FROM codex_session_messages WHERE session_id=?",
-		"DELETE FROM codex_session_embeddings WHERE chunk_id IN (SELECT id FROM codex_session_chunks WHERE session_id=?)",
 		"DELETE FROM codex_session_chunks WHERE session_id=?",
 		"DELETE FROM codex_session_fts WHERE session_id=?",
 		"DELETE FROM codex_message_fts WHERE session_id=?",
@@ -676,7 +679,7 @@ ON CONFLICT(id) DO UPDATE SET machine=excluded.machine,title=excluded.title,firs
 	if _, err := tx.Exec(`INSERT INTO codex_session_fts(session_id,title,cwd,first_user_message,last_agent_message,files,commands,text) VALUES(?,?,?,?,?,?,?,?)`, sess.ID, sess.Title, sess.CWD, sess.FirstUserMessage, sess.LastAgentMessage, strings.Join(sess.FilesTouched, "\n"), strings.Join(sess.Commands, "\n"), searchText); err != nil {
 		return err
 	}
-	for _, c := range buildChunks(parsed) {
+	for _, c := range chunks {
 		if _, err := tx.Exec(`INSERT INTO codex_session_chunks(id,session_id,chunk_index,kind,text,text_sha256,token_estimate,metadata_json) VALUES(?,?,?,?,?,?,?,?)`, c.ID, c.SessionID, c.Index, c.Kind, c.Text, c.TextSHA256, c.TokenEstimate, j(c.Metadata)); err != nil {
 			return err
 		}
@@ -690,6 +693,47 @@ ON CONFLICT(session_id) DO UPDATE SET schema_version=excluded.schema_version,cap
 		return err
 	}
 	return tx.Commit()
+}
+
+func removeChangedSessionEmbeddings(tx *sql.Tx, sessionID string, chunks []chunkRecord) error {
+	currentHashes := make(map[string]string, len(chunks))
+	for _, chunk := range chunks {
+		currentHashes[chunk.ID] = chunk.TextSHA256
+	}
+	rows, err := tx.Query(`SELECT e.chunk_id,e.provider,e.model,e.text_sha256,c.text_sha256
+		FROM codex_session_embeddings e
+		JOIN codex_session_chunks c ON c.id=e.chunk_id
+		WHERE c.session_id=?`, sessionID)
+	if err != nil {
+		return err
+	}
+	type embeddingKey struct {
+		chunkID  string
+		provider string
+		model    string
+	}
+	var remove []embeddingKey
+	for rows.Next() {
+		var key embeddingKey
+		var embeddingHash, oldChunkHash string
+		if err := rows.Scan(&key.chunkID, &key.provider, &key.model, &embeddingHash, &oldChunkHash); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		newHash, exists := currentHashes[key.chunkID]
+		if !exists || embeddingHash != newHash || oldChunkHash != newHash {
+			remove = append(remove, key)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, key := range remove {
+		if _, err := tx.Exec(`DELETE FROM codex_session_embeddings WHERE chunk_id=? AND provider=? AND model=?`, key.chunkID, key.provider, key.model); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func List(limit int) ([]Session, error) {

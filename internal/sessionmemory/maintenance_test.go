@@ -68,6 +68,32 @@ func TestUpsertRemovesEmbeddingsForReplacedChunks(t *testing.T) {
 	}
 }
 
+func TestUpsertPreservesEmbeddingsForUnchangedChunks(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	parsed := testParsedSession("keep-embedding", "same answer")
+	if err := store.upsert(parsed, nil); err != nil {
+		t.Fatal(err)
+	}
+	chunk := buildChunks(parsed)[0]
+	if _, err := store.db.Exec(`INSERT INTO codex_session_embeddings(chunk_id,provider,model,dim,vector_blob,text_sha256,embedded_at) VALUES(?,?,?,?,?,?,?)`, chunk.ID, "openai", DefaultEmbeddingModel, 2, packVector([]float64{1, 0}), chunk.TextSHA256, "2026-08-07T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.upsert(parsed, nil); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_embeddings WHERE chunk_id=?`, chunk.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("unchanged embedding count=%d, want 1", count)
+	}
+}
+
 func TestDoctorRepairsEmbeddingIntegrityAndRawEvents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.sqlite")
 	store, err := Open(path)
