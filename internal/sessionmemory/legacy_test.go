@@ -19,10 +19,11 @@ func TestBackfillLegacySessionsRebuildsMissingContinuity(t *testing.T) {
 	}
 	for _, message := range []Message{
 		{LineNo: 0, Role: "user", Kind: "message", Text: "# AGENTS.md instructions for /repo"},
-		{LineNo: 1, Role: "user", Kind: "message", Text: "Recover the old checkout task"},
-		{LineNo: 2, Role: "assistant", Kind: "message", Text: "Next action: run the smoke test"},
+		{LineNo: 1, Timestamp: "2026-08-07T12:00:01Z", Role: "user", Kind: "message", Text: "Recover the old checkout task"},
+		{LineNo: 2, Timestamp: "2026-08-07T12:00:01Z", Role: "user", Kind: "message", Text: "Recover the old checkout task"},
+		{LineNo: 3, Role: "assistant", Kind: "message", Text: "Next action: run the smoke test"},
 	} {
-		if _, err := store.db.Exec(`INSERT INTO codex_session_messages(session_id,line_no,role,kind,text) VALUES(?,?,?,?,?)`, "legacy-session", message.LineNo, message.Role, message.Kind, message.Text); err != nil {
+		if _, err := store.db.Exec(`INSERT INTO codex_session_messages(session_id,line_no,timestamp,role,kind,text) VALUES(?,?,?,?,?,?)`, "legacy-session", message.LineNo, message.Timestamp, message.Role, message.Kind, message.Text); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -49,6 +50,13 @@ func TestBackfillLegacySessionsRebuildsMissingContinuity(t *testing.T) {
 	}
 	if noisyMessages != 0 {
 		t.Fatalf("legacy injected messages remain: %d", noisyMessages)
+	}
+	var realUserMessages int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_messages WHERE session_id='legacy-session' AND text='Recover the old checkout task'`).Scan(&realUserMessages); err != nil {
+		t.Fatal(err)
+	}
+	if realUserMessages != 1 {
+		t.Fatalf("legacy paired messages remain: %d", realUserMessages)
 	}
 	var rawEvents int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_events WHERE session_id='legacy-session'`).Scan(&rawEvents); err != nil {

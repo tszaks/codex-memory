@@ -40,6 +40,22 @@ Fix the checkout regression and verify it.`
 	}
 }
 
+func TestParseRolloutDeduplicatesPairedMessageEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-2026-08-07T12-00-00-dedup-session.jsonl")
+	writeJSONLines(t, path, []any{
+		map[string]any{"type": "session_meta", "timestamp": "2026-08-07T12:00:00Z", "payload": map[string]any{"id": "dedup-session"}},
+		map[string]any{"type": "event_msg", "timestamp": "2026-08-07T12:00:01Z", "payload": map[string]any{"type": "user_message", "message": "ship once"}},
+		map[string]any{"type": "response_item", "timestamp": "2026-08-07T12:00:01Z", "payload": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "ship once"}}}},
+	})
+	parsed, err := parseRollout(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Messages) != 1 || parsed.Coverage.MessagesSeen != 1 || parsed.Messages[0].Text != "ship once" {
+		t.Fatalf("paired message events were not deduplicated: messages=%+v coverage=%+v", parsed.Messages, parsed.Coverage)
+	}
+}
+
 func TestParseLargeRolloutKeepsBoundedFirstAndLastContinuity(t *testing.T) {
 	originalThreshold := largeTranscriptThresholdBytes
 	largeTranscriptThresholdBytes = 1

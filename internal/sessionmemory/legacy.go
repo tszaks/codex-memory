@@ -58,6 +58,9 @@ func (s *Store) backfillLegacySessions() (int, error) {
 					firstRealUserMessage = short(message.Text, maxStoredFirstUserText)
 				}
 			}
+			if len(cleanMessages) > 0 && duplicateSessionMessage(cleanMessages[len(cleanMessages)-1], message) {
+				continue
+			}
 			cleanMessages = append(cleanMessages, message)
 		}
 		messages = cleanMessages

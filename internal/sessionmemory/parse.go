@@ -168,6 +168,11 @@ func newParsedSession(rawBytes int64) ParsedSession {
 }
 
 func appendParsedMessage(p *ParsedSession, message Message) {
+	if p.hasLast && duplicateSessionMessage(p.lastMessage, message) {
+		return
+	}
+	p.lastMessage = message
+	p.hasLast = true
 	p.messageCount++
 	if p.Coverage.Mode != "sampled" || len(p.Messages) < largeTranscriptHeadMessages {
 		p.Messages = append(p.Messages, message)
@@ -179,6 +184,13 @@ func appendParsedMessage(p *ParsedSession, message Message) {
 	}
 	p.messageTail[p.tailNext] = message
 	p.tailNext = (p.tailNext + 1) % len(p.messageTail)
+}
+
+func duplicateSessionMessage(previous, current Message) bool {
+	return previous.Timestamp != "" &&
+		previous.Timestamp == current.Timestamp &&
+		previous.Role == current.Role &&
+		previous.Text == current.Text
 }
 
 func finalizeParsedMessages(p *ParsedSession) {

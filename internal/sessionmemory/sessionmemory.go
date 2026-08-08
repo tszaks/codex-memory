@@ -117,6 +117,8 @@ type ParsedSession struct {
 	messageCount int
 	messageTail  []Message
 	tailNext     int
+	lastMessage  Message
+	hasLast      bool
 }
 
 type SessionCoverage struct {
