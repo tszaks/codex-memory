@@ -45,9 +45,27 @@ func Sync(ctx context.Context, opts SyncOptions, progress func(SyncProgress)) (S
 	}
 	if !opts.Index.Force {
 		doctor, err := DoctorSessions(SessionDoctorOptions{DBPath: opts.Index.DBPath})
-		if err == nil && doctor.DBExists && (doctor.NoisyTitles > 0 || doctor.OversizedFirstMessages > 0 || doctor.SkippedLargeSessions > 0 || doctor.MissingCapsules > 0) {
-			opts.Index.Force = true
-			report.FullReindex = true
+		if err == nil && doctor.DBExists {
+			if doctor.NoisyTitles > 0 && doctor.OversizedFirstMessages == 0 && doctor.SkippedLargeSessions == 0 && doctor.MissingCapsules == 0 {
+				store, openErr := Open(opts.Index.DBPath)
+				if openErr != nil {
+					return report, openErr
+				}
+				rebuilt, rebuildErr := store.backfillLegacySessions()
+				closeErr := store.Close()
+				if rebuildErr != nil {
+					return report, rebuildErr
+				}
+				if closeErr != nil {
+					return report, closeErr
+				}
+				report.LegacyBackfilled += rebuilt
+				doctor, err = DoctorSessions(SessionDoctorOptions{DBPath: opts.Index.DBPath})
+			}
+			if err == nil && (doctor.NoisyTitles > 0 || doctor.OversizedFirstMessages > 0 || doctor.SkippedLargeSessions > 0 || doctor.MissingCapsules > 0) {
+				opts.Index.Force = true
+				report.FullReindex = true
+			}
 		}
 	}
 	if progress != nil {
@@ -62,7 +80,8 @@ func Sync(ctx context.Context, opts SyncOptions, progress func(SyncProgress)) (S
 	if err != nil {
 		return report, err
 	}
-	report.LegacyBackfilled, err = store.backfillLegacySessions()
+	rebuilt, err := store.backfillLegacySessions()
+	report.LegacyBackfilled += rebuilt
 	closeErr := store.Close()
 	if err != nil {
 		return report, err

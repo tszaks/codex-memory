@@ -147,3 +147,55 @@ func TestSyncIndexesCapsulesAndExplainsEmbeddingSkip(t *testing.T) {
 		t.Fatalf("unexpected progress phases: %v", phases)
 	}
 }
+
+func TestSyncRepairsLegacyNoiseWithoutForcingUnchangedSources(t *testing.T) {
+	t.Setenv("PALLIUM_EMBED_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_ADMIN_API_KEY", "")
+	tmp := t.TempDir()
+	claudeHome := filepath.Join(tmp, ".claude")
+	transcript := filepath.Join(claudeHome, "projects", "repo", "sync-legacy-noise.jsonl")
+	writeJSONLines(t, transcript, []any{
+		map[string]any{"type": "user", "sessionId": "sync-legacy-noise", "message": map[string]any{"role": "user", "content": "ship the repaired sync"}},
+	})
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(transcript, old, old); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(tmp, "sessions.sqlite")
+	if _, err := Sync(context.Background(), SyncOptions{Index: Options{DBPath: dbPath, ClaudeHome: claudeHome, Provider: "claude"}, NoEmbed: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE codex_sessions SET title='# AGENTS.md instructions for /repo',first_user_message='# AGENTS.md instructions for /repo' WHERE id='sync-legacy-noise'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO codex_session_messages(session_id,line_no,role,kind,text) VALUES('sync-legacy-noise',0,'user','message','# AGENTS.md instructions for /repo')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Sync(context.Background(), SyncOptions{Index: Options{DBPath: dbPath, ClaudeHome: claudeHome, Provider: "claude"}, NoEmbed: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FullReindex || report.Indexed != 0 || report.LegacyBackfilled != 1 {
+		t.Fatalf("legacy-only repair forced source reindex: %+v", report)
+	}
+	store, err = Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sess, err := store.loadSession("sync-legacy-noise")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Title != "ship the repaired sync" || sess.FirstUserMessage != "ship the repaired sync" {
+		t.Fatalf("legacy-only repair did not recover the real ask: %+v", sess)
+	}
+}
