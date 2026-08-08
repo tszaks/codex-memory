@@ -635,7 +635,7 @@ func (s *Store) upsert(parsed ParsedSession, metadata map[string]any) error {
 	parsed.Session = sess
 	parsed.SearchBlob = redact(parsed.SearchBlob)
 	capsule := buildSessionCapsule(parsed)
-	chunks := buildChunks(parsed)
+	chunks := buildContinuityChunks(parsed, capsule)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := removeChangedSessionEmbeddings(tx, sess.ID, chunks); err != nil {
 		return err

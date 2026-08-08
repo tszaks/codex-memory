@@ -137,6 +137,10 @@ retrieval is unavailable or times out, it returns lexical evidence and says so.
 Filter recall and search with `--repo`, `--cwd`, `--source`, `--file`, `--since`,
 or `--before`.
 
+Semantic retrieval stores one bounded continuity vector per session, built from
+the capsule, repository metadata, touched files, commands, and first/last
+conversation evidence. Exact search still covers the full indexed transcript.
+
 `sessions live` discovers terminal agents and Codex desktop tasks. A task is
 `active` only when recent transcript activity supports that label. A live task
 with no recent activity is `idle`; inactivity alone is not reported as a hang.

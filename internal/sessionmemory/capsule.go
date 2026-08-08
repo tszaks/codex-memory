@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const sessionCapsuleSchemaVersion = 3
+const sessionCapsuleSchemaVersion = 4
 
 type CapsuleEvidence struct {
 	LineNo  int    `json:"line_no"`

@@ -308,23 +308,91 @@ type chunkRecord struct {
 }
 
 func buildChunks(p ParsedSession) []chunkRecord {
-	overview := strings.Join([]string{"Title: " + p.Session.Title, "CWD: " + p.Session.CWD, "Git: " + p.Session.GitOriginURL + " " + p.Session.GitBranch, "First ask: " + p.Session.FirstUserMessage, "Last agent message: " + p.Session.LastAgentMessage, "Files touched:\n" + strings.Join(p.Session.FilesTouched, "\n"), "Commands:\n" + strings.Join(p.Session.Commands, "\n"), "Errors:\n" + strings.Join(p.Session.Errors, "\n")}, "\n")
-	var transcriptParts []string
-	for _, m := range p.Messages {
-		if m.Text != "" {
-			transcriptParts = append(transcriptParts, fmt.Sprintf("[%s/%s line %d]\n%s", m.Role, m.Kind, m.LineNo, m.Text))
-		}
+	if p.Session.Status == "" {
+		p.Session.Status = "seen"
 	}
-	var out []chunkRecord
-	idx := 0
-	for _, piece := range []struct{ kind, text string }{{"overview", overview}, {"transcript", strings.Join(transcriptParts, "\n\n")}} {
-		for _, text := range chunkText(piece.text, 6000, 600) {
-			sha := fmt.Sprintf("%x", sha256.Sum256([]byte(text)))
-			out = append(out, chunkRecord{ID: fmt.Sprintf("%s:%04d", p.Session.ID, idx), SessionID: p.Session.ID, Index: idx, Kind: piece.kind, Text: text, TextSHA256: sha, TokenEstimate: max(1, len(text)/4), Metadata: map[string]any{"session_title": p.Session.Title, "cwd": p.Session.CWD}})
-			idx++
+	return buildContinuityChunks(p, buildSessionCapsule(p))
+}
+
+func buildContinuityChunks(p ParsedSession, capsule SessionCapsule) []chunkRecord {
+	parts := []string{
+		"Title: " + short(p.Session.Title, 240),
+		"CWD: " + short(p.Session.CWD, 400),
+		"Repository: " + short(strings.TrimSpace(p.Session.GitOriginURL+" "+p.Session.GitBranch), 300),
+		"Status: " + short(capsule.Status, 60),
+		"Goal: " + short(capsule.Goal, 700),
+		"Stopped at: " + short(capsule.StoppedAt, 700),
+		"Next action: " + short(capsule.NextAction, 350),
+		"Completed: " + compactContinuityItems(capsule.Completed, 3, 400),
+		"Remaining: " + compactContinuityItems(capsule.Remaining, 3, 400),
+		"Blockers: " + compactContinuityItems(capsule.Blockers, 3, 400),
+		"Conversation evidence: " + continuityEvidenceText(p.Messages, 4, 6, 700),
+		"Files: " + compactContinuityItems(p.Session.FilesTouched, 8, 800),
+		"Commands: " + compactContinuityItems(p.Session.Commands, 4, 600),
+	}
+	text := truncate(strings.TrimSpace(strings.Join(nonEmptyContinuityParts(parts), "\n")), 6000)
+	if text == "" {
+		return nil
+	}
+	sha := fmt.Sprintf("%x", sha256.Sum256([]byte(text)))
+	return []chunkRecord{{
+		ID:            fmt.Sprintf("%s:%04d", p.Session.ID, 0),
+		SessionID:     p.Session.ID,
+		Index:         0,
+		Kind:          "continuity",
+		Text:          text,
+		TextSHA256:    sha,
+		TokenEstimate: max(1, len(text)/4),
+		Metadata:      map[string]any{"session_title": p.Session.Title, "cwd": p.Session.CWD, "coverage": capsule.Coverage.Mode},
+	}}
+}
+
+func nonEmptyContinuityParts(parts []string) []string {
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		separator := strings.Index(part, ":")
+		if separator >= 0 && strings.TrimSpace(part[separator+1:]) == "" {
+			continue
 		}
+		out = append(out, part)
 	}
 	return out
+}
+
+func compactContinuityItems(items []string, limit, maxChars int) string {
+	if limit <= 0 || maxChars <= 0 {
+		return ""
+	}
+	values := make([]string, 0, min(limit, len(items)))
+	for _, item := range items {
+		item = short(redact(item), maxChars)
+		if item == "" {
+			continue
+		}
+		values = append(values, item)
+		if len(values) >= limit {
+			break
+		}
+	}
+	return truncate(strings.Join(values, " | "), maxChars)
+}
+
+func continuityEvidenceText(messages []Message, headLimit, tailLimit, maxChars int) string {
+	conversation := make([]Message, 0, len(messages))
+	for _, message := range messages {
+		if (message.Role == "user" || message.Role == "assistant") && strings.TrimSpace(message.Text) != "" {
+			conversation = append(conversation, message)
+		}
+	}
+	selected := make([]Message, 0, headLimit+tailLimit)
+	selected = append(selected, conversation[:min(headLimit, len(conversation))]...)
+	tailStart := max(len(selected), len(conversation)-tailLimit)
+	selected = append(selected, conversation[tailStart:]...)
+	parts := make([]string, 0, len(selected))
+	for _, message := range selected {
+		parts = append(parts, fmt.Sprintf("[%s line %d] %s", message.Role, message.LineNo, short(redact(message.Text), 240)))
+	}
+	return truncate(strings.Join(parts, " | "), maxChars)
 }
 
 func chunkText(text string, maxChars, overlap int) []string {
