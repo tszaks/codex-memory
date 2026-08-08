@@ -37,6 +37,7 @@ type SessionDoctorReport struct {
 	OversizedFirstMessages int                  `json:"oversized_first_messages"`
 	SkippedLargeSessions   int                  `json:"skipped_large_sessions"`
 	MissingCapsules        int                  `json:"missing_capsules"`
+	OutdatedCapsules       int                  `json:"outdated_capsules"`
 	LatestIndexedAt        string               `json:"latest_indexed_at,omitempty"`
 	LatestSessionUpdate    string               `json:"latest_session_update,omitempty"`
 	Healthy                bool                 `json:"healthy"`
@@ -186,6 +187,9 @@ func populateSessionDoctorReport(store *Store, report *SessionDoctorReport) erro
 			return err
 		}
 	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_capsules WHERE schema_version < ?`, sessionCapsuleSchemaVersion).Scan(&report.OutdatedCapsules); err != nil {
+		return err
+	}
 	_ = store.db.QueryRow(`SELECT COALESCE(MAX(indexed_at),'') FROM codex_sessions`).Scan(&report.LatestIndexedAt)
 	_ = store.db.QueryRow(`SELECT COALESCE(MAX(COALESCE(updated_at,created_at)),'') FROM codex_sessions`).Scan(&report.LatestSessionUpdate)
 
@@ -212,6 +216,9 @@ func populateSessionDoctorReport(store *Store, report *SessionDoctorReport) erro
 	}
 	if report.MissingCapsules > 0 {
 		report.Issues = append(report.Issues, "Some sessions do not have continuity capsules; run a forced sync.")
+	}
+	if report.OutdatedCapsules > 0 {
+		report.Issues = append(report.Issues, "Some continuity capsules use an older schema; run `pallium sessions sync`.")
 	}
 	report.Healthy = len(report.Issues) == 0
 	return nil

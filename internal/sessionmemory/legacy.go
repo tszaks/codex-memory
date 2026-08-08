@@ -1,7 +1,9 @@
 package sessionmemory
 
 import (
+	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -15,7 +17,8 @@ func (s *Store) backfillLegacySessions() (int, error) {
 			OR s.title LIKE '# AGENTS.md instructions%'
 			OR length(s.first_user_message)>10000
 			OR s.status='skipped_large_rollout'
-		ORDER BY COALESCE(NULLIF(s.updated_at,''),s.created_at)`)
+			OR c.schema_version < ?
+		ORDER BY COALESCE(NULLIF(s.updated_at,''),s.created_at)`, sessionCapsuleSchemaVersion)
 	if err != nil {
 		return 0, err
 	}
@@ -66,6 +69,35 @@ func (s *Store) backfillLegacySessions() (int, error) {
 			MessagesStored:  len(messages),
 			MessagesDropped: messagesSeen - len(messages),
 			Warning:         "Continuity was rebuilt from previously indexed messages because the original source transcript was unavailable during sync.",
+		}
+		var existingCapsuleJSON string
+		switch err := s.db.QueryRow(`SELECT capsule_json FROM codex_session_capsules WHERE session_id=?`, id).Scan(&existingCapsuleJSON); err {
+		case nil:
+			existingCapsule, decodeErr := decodeSessionCapsule(existingCapsuleJSON)
+			if decodeErr == nil && existingCapsule.Coverage.Mode != "" {
+				coverage = existingCapsule.Coverage
+				if coverage.Mode == "full" {
+					coverage.MessagesSeen = len(messages)
+					coverage.MessagesStored = len(messages)
+					coverage.MessagesDropped = 0
+				}
+			}
+		case sql.ErrNoRows:
+		default:
+			return backfilled, err
+		}
+		if coverage.Mode == "legacy" && sess.RolloutPath != "" {
+			if info, statErr := os.Stat(sess.RolloutPath); statErr == nil {
+				coverage.RawBytes = info.Size()
+				coverage.MessagesSeen = len(messages)
+				coverage.MessagesStored = len(messages)
+				coverage.MessagesDropped = 0
+				coverage.Warning = ""
+				coverage.Mode = "full"
+				if info.Size() > largeTranscriptThresholdBytes {
+					coverage.Mode = "sampled"
+				}
+			}
 		}
 		if len(messages) > largeTranscriptHeadMessages+largeTranscriptTailMessages {
 			coverage.Mode = "sampled"

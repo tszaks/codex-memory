@@ -46,6 +46,19 @@ Next action: Ask the owner to run the smoke test.`)
 	}
 }
 
+func TestCapsuleDoesNotPromoteHistoricalErrorsOrTurnCompletion(t *testing.T) {
+	parsed := testParsedSession("clean-capsule", "I am checking the remaining migration.")
+	parsed.Session.Status = "complete"
+	parsed.Session.Errors = []string{"old test failed before the fix"}
+	capsule := buildSessionCapsule(parsed)
+	if len(capsule.Blockers) != 0 || len(capsule.Completed) != 0 {
+		t.Fatalf("historical state became a current handoff claim: %+v", capsule)
+	}
+	if capsule.SchemaVersion != sessionCapsuleSchemaVersion {
+		t.Fatalf("schema version=%d, want %d", capsule.SchemaVersion, sessionCapsuleSchemaVersion)
+	}
+}
+
 func TestRedactExpandedSecretForms(t *testing.T) {
 	for _, secret := range []string{
 		"postgresql://user:very-secret-password@example.test/db",

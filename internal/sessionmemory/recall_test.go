@@ -199,3 +199,50 @@ func TestSyncRepairsLegacyNoiseWithoutForcingUnchangedSources(t *testing.T) {
 		t.Fatalf("legacy-only repair did not recover the real ask: %+v", sess)
 	}
 }
+
+func TestSyncMigratesOutdatedCapsulesIncrementally(t *testing.T) {
+	tmp := t.TempDir()
+	claudeHome := filepath.Join(tmp, ".claude")
+	transcript := filepath.Join(claudeHome, "projects", "repo", "sync-capsule-schema.jsonl")
+	writeJSONLines(t, transcript, []any{
+		map[string]any{"type": "user", "sessionId": "sync-capsule-schema", "message": map[string]any{"role": "user", "content": "migrate the capsule"}},
+	})
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(transcript, old, old); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(tmp, "sessions.sqlite")
+	opts := SyncOptions{Index: Options{DBPath: dbPath, ClaudeHome: claudeHome, Provider: "claude"}, NoEmbed: true}
+	if _, err := Sync(context.Background(), opts, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE codex_session_capsules SET schema_version=1 WHERE session_id='sync-capsule-schema'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Sync(context.Background(), opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FullReindex || report.Indexed != 0 || report.LegacyBackfilled != 1 {
+		t.Fatalf("capsule migration forced source reindex: %+v", report)
+	}
+	store, err = Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.db.QueryRow(`SELECT schema_version FROM codex_session_capsules WHERE session_id='sync-capsule-schema'`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != sessionCapsuleSchemaVersion {
+		t.Fatalf("capsule schema=%d, want %d", version, sessionCapsuleSchemaVersion)
+	}
+}

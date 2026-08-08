@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const sessionCapsuleSchemaVersion = 1
+const sessionCapsuleSchemaVersion = 2
 
 type CapsuleEvidence struct {
 	LineNo  int    `json:"line_no"`
@@ -52,14 +52,13 @@ func buildSessionCapsule(parsed ParsedSession) SessionCapsule {
 		Coverage:      coverage,
 		GeneratedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	for _, item := range parsed.Session.Errors {
-		appendUniqueCapsuleItem(&capsule.Blockers, short(redact(item), 500), 8)
+	if capsule.Status == "aborted" {
+		for _, item := range parsed.Session.Errors {
+			appendUniqueCapsuleItem(&capsule.Blockers, short(redact(item), 500), 8)
+		}
 	}
 	if capsule.NextAction == "" && len(capsule.Remaining) > 0 {
 		capsule.NextAction = capsule.Remaining[0]
-	}
-	if capsule.Status == "complete" && len(capsule.Completed) == 0 {
-		capsule.Completed = []string{"The source transcript marked the task complete."}
 	}
 	if capsule.Status == "aborted" && len(capsule.Blockers) == 0 {
 		capsule.Blockers = []string{"The source transcript ended with an aborted turn."}
