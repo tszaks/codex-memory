@@ -231,7 +231,7 @@ func handleClaudeLine(p *ParsedSession, obj map[string]any, lineNo int, files, t
 	case "last-prompt", "queue-operation":
 		text := capMessageText(normalizeUserText(first(str(obj["lastPrompt"]), str(obj["content"]))))
 		if text != "" && p.Session.FirstUserMessage == "" {
-			p.Session.FirstUserMessage = short(text, maxStoredMessageText)
+			p.Session.FirstUserMessage = short(text, maxStoredFirstUserText)
 		}
 	case "user", "assistant", "system":
 		handleClaudeMessage(p, obj, lineNo, ts, files, tools)
@@ -259,7 +259,7 @@ func handleClaudeMessage(p *ParsedSession, obj map[string]any, lineNo int, ts st
 			text = capMessageText(text)
 			if text != "" {
 				if role == "user" && p.Session.FirstUserMessage == "" {
-					p.Session.FirstUserMessage = short(text, maxStoredMessageText)
+					p.Session.FirstUserMessage = short(text, maxStoredFirstUserText)
 				}
 				if role == "assistant" {
 					p.Session.LastAgentMessage = short(text, maxStoredMessageText)
@@ -349,7 +349,7 @@ func handleEventMessage(p *ParsedSession, payload map[string]any, lineNo int, ts
 		text := capMessageText(normalizeUserText(str(payload["message"])))
 		if text != "" {
 			if p.Session.FirstUserMessage == "" {
-				p.Session.FirstUserMessage = short(text, maxStoredMessageText)
+				p.Session.FirstUserMessage = short(text, maxStoredFirstUserText)
 			}
 			appendParsedMessage(p, Message{lineNo, ts, "user", "message", text})
 		}
@@ -393,7 +393,7 @@ func handleResponseItem(p *ParsedSession, payload map[string]any, lineNo int, ts
 		text = capMessageText(text)
 		if (role == "user" || role == "assistant") && text != "" {
 			if role == "user" && p.Session.FirstUserMessage == "" {
-				p.Session.FirstUserMessage = short(text, maxStoredMessageText)
+				p.Session.FirstUserMessage = short(text, maxStoredFirstUserText)
 			}
 			if role == "assistant" {
 				p.Session.LastAgentMessage = short(text, maxStoredMessageText)

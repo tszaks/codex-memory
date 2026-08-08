@@ -24,6 +24,7 @@ const (
 	maxStoredRawEventJSON        = 20_000
 	maxStoredRawEventsPerSession = 100
 	maxStoredMessageText         = 50_000
+	maxStoredFirstUserText       = 4_000
 	maxStoredCommandText         = 20_000
 	maxStoredCommands            = 1_000
 	maxStoredErrors              = 200
@@ -424,7 +425,8 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 	cutoff := store.indexCutoff(opts)
 	if provider == "all" || provider == "codex" {
 		state := loadStateMetadata(filepath.Join(opts.CodexHome, "state_5.sqlite"))
-		files := findRollouts(filepath.Join(opts.CodexHome, "sessions"), include, cutoff)
+		codexIncludes := append([]string{filepath.Join(opts.CodexHome, "archived_sessions")}, include...)
+		files := findRollouts(filepath.Join(opts.CodexHome, "sessions"), codexIncludes, cutoff)
 		for _, file := range files {
 			select {
 			case <-ctx.Done():
@@ -826,7 +828,7 @@ func ShowPath(dbPath, id string, transcript bool) (Session, []Message, error) {
 	if !transcript {
 		return sess, []Message{}, nil
 	}
-	rows, err := store.db.Query(`SELECT line_no,timestamp,role,kind,text FROM codex_session_messages WHERE session_id=? ORDER BY line_no`, sid)
+	rows, err := store.db.Query(`SELECT line_no,COALESCE(timestamp,''),COALESCE(role,''),COALESCE(kind,''),COALESCE(text,'') FROM codex_session_messages WHERE session_id=? ORDER BY line_no`, sid)
 	if err != nil {
 		return Session{}, nil, err
 	}
@@ -862,7 +864,7 @@ func ReadMessages(dbPath, id string, fromLine, limit int) (Session, []Message, e
 	if err != nil {
 		return Session{}, nil, err
 	}
-	rows, err := store.db.Query(`SELECT line_no,timestamp,role,kind,text FROM codex_session_messages WHERE session_id=? AND line_no>=? ORDER BY line_no LIMIT ?`, sessionID, max(0, fromLine), limit)
+	rows, err := store.db.Query(`SELECT line_no,COALESCE(timestamp,''),COALESCE(role,''),COALESCE(kind,''),COALESCE(text,'') FROM codex_session_messages WHERE session_id=? AND line_no>=? ORDER BY line_no LIMIT ?`, sessionID, max(0, fromLine), limit)
 	if err != nil {
 		return Session{}, nil, err
 	}
@@ -1271,6 +1273,7 @@ var injectedContextBlocks = []*regexp.Regexp{
 	regexp.MustCompile(`(?is)<plugins_instructions>.*?</plugins_instructions>`),
 	regexp.MustCompile(`(?is)<collaboration_mode>.*?</collaboration_mode>`),
 	regexp.MustCompile(`(?is)<INSTRUCTIONS>.*?</INSTRUCTIONS>`),
+	regexp.MustCompile(`(?is)<!--\s*pallium:agents:begin\s*-->.*?<!--\s*pallium:agents:end\s*-->`),
 }
 
 func normalizeUserText(s string) string {
@@ -1288,6 +1291,7 @@ func normalizeUserText(s string) string {
 		"<collaboration_mode>",
 		"<instructions>",
 		"# agents.md instructions",
+		"<!-- pallium:agents:begin -->",
 	} {
 		if strings.HasPrefix(lower, prefix) {
 			startsWithInjectedContext = true

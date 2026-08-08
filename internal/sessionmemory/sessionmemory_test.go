@@ -89,6 +89,35 @@ func TestIndexProviderCodexSkipsClaudeIncludes(t *testing.T) {
 	}
 }
 
+func TestIndexIncludesArchivedCodexRollouts(t *testing.T) {
+	tmp := t.TempDir()
+	codexHome := filepath.Join(tmp, ".codex")
+	archiveDir := filepath.Join(codexHome, "archived_sessions", "2026")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rolloutPath := filepath.Join(archiveDir, "rollout-2026-06-22T12-00-00-archived-session.jsonl")
+	content := strings.Join([]string{
+		`{"type":"session_meta","timestamp":"2026-06-22T12:00:00Z","payload":{"id":"archived-session","cwd":"/tmp/repo","source":"codex"}}`,
+		`{"type":"event_msg","timestamp":"2026-06-22T12:01:00Z","payload":{"type":"user_message","message":"archived prompt"}}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(rolloutPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(rolloutPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	count, err := Index(context.Background(), Options{DBPath: filepath.Join(tmp, "sessions.sqlite"), CodexHome: codexHome, Provider: "codex", Force: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("indexed archived sessions=%d, want 1", count)
+	}
+}
+
 func TestIndexAllDirectClaudeIncludeIsNotClaimedByCodex(t *testing.T) {
 	tmp := t.TempDir()
 	claudePath := filepath.Join(tmp, "claude-1.jsonl")

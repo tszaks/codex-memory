@@ -29,6 +29,7 @@ type SyncReport struct {
 	EmbeddingSkipped bool   `json:"embedding_skipped"`
 	EmbeddingWarning string `json:"embedding_warning,omitempty"`
 	FullReindex      bool   `json:"full_reindex"`
+	LegacyBackfilled int    `json:"legacy_backfilled"`
 	Stats            Stats  `json:"stats"`
 	Duration         string `json:"duration"`
 }
@@ -57,6 +58,18 @@ func Sync(ctx context.Context, opts SyncOptions, progress func(SyncProgress)) (S
 		return report, err
 	}
 	report.Indexed = indexed
+	store, err := Open(opts.Index.DBPath)
+	if err != nil {
+		return report, err
+	}
+	report.LegacyBackfilled, err = store.backfillLegacySessions()
+	closeErr := store.Close()
+	if err != nil {
+		return report, err
+	}
+	if closeErr != nil {
+		return report, closeErr
+	}
 	model := resolveEmbeddingModel(opts.Index.EmbeddingModel)
 	backlog, err := EmbeddingBacklogPath(opts.Index.DBPath, model)
 	if err != nil {
@@ -90,7 +103,7 @@ func Sync(ctx context.Context, opts SyncOptions, progress func(SyncProgress)) (S
 	}
 	report.Duration = time.Since(started).Round(time.Millisecond).String()
 	if progress != nil {
-		progress(SyncProgress{Phase: "complete", Completed: report.Indexed + report.Embedded, Message: fmt.Sprintf("Indexed %d sessions and embedded %d chunks.", report.Indexed, report.Embedded)})
+		progress(SyncProgress{Phase: "complete", Completed: report.Indexed + report.LegacyBackfilled + report.Embedded, Message: fmt.Sprintf("Indexed %d sessions, rebuilt %d legacy sessions, and embedded %d chunks.", report.Indexed, report.LegacyBackfilled, report.Embedded)})
 	}
 	return report, nil
 }

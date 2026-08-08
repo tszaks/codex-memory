@@ -309,7 +309,7 @@ func runSessionsSync(out io.Writer, args []string, jsonOutput bool) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(report)
 	}
-	fmt.Fprintf(out, "sync result: %d indexed, %d embedded, %d embedding backlog, %s\n", report.Indexed, report.Embedded, report.EmbeddingBacklog, report.Duration)
+	fmt.Fprintf(out, "sync result: %d indexed, %d legacy sessions rebuilt, %d embedded, %d embedding backlog, %s\n", report.Indexed, report.LegacyBackfilled, report.Embedded, report.EmbeddingBacklog, report.Duration)
 	if report.FullReindex {
 		fmt.Fprintln(out, "coverage: performed a full reindex to upgrade legacy session memory")
 	}
