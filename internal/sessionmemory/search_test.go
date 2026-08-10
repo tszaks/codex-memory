@@ -118,6 +118,40 @@ func TestSearchFileFilterContinuesPastInitialLexicalCandidates(t *testing.T) {
 	}
 }
 
+func TestLexicalOnlySearchStopsAfterRequestedFileMatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.sqlite")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := testParsedSession("a-target", "billing")
+	target.Session.FilesTouched = []string{"src/rare.go"}
+	target.SearchBlob = "billing"
+	if err := store.upsert(target, nil); err != nil {
+		t.Fatal(err)
+	}
+	invalidAfterTarget := testParsedSession("z-invalid-after-target", "billing")
+	invalidAfterTarget.Session.FilesTouched = []string{"src/rare.go"}
+	invalidAfterTarget.SearchBlob = "billing"
+	if err := store.upsert(invalidAfterTarget, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE codex_sessions SET tokens_used='not-an-integer' WHERE id=?`, invalidAfterTarget.Session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := SearchWithOptions(context.Background(), SessionSearchOptions{DBPath: path, Query: "billing", Limit: 1, Files: []string{"src/rare.go"}})
+	if err != nil {
+		t.Fatalf("lexical search loaded candidates after satisfying the requested limit: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != target.Session.ID {
+		t.Fatalf("unexpected lexical-only result: %+v", results)
+	}
+}
+
 func TestHybridSearchFusesLexicalAndSemanticRanks(t *testing.T) {
 	t.Setenv("PALLIUM_EMBED_PROVIDER", "test-local")
 	path := filepath.Join(t.TempDir(), "sessions.sqlite")

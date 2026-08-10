@@ -115,6 +115,43 @@ func TestCollectClaudeSessionsFallsBackToTranscriptMetadataWithoutHistory(t *tes
 	}
 }
 
+func TestCollectClaudeSessionsFillsMissingProjectFromTranscript(t *testing.T) {
+	tmp := t.TempDir()
+	projects := filepath.Join(tmp, "projects", "-repo")
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "1ee0f2e6-b212-4dad-8abd-f6fe1e2d0967"
+	generatedAt := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	transcript := fmt.Sprintf(`{"type":"user","timestamp":"%s","sessionId":"%s","cwd":"/repo","message":{"role":"user","content":"Fill the missing project"}}`+"\n", generatedAt.Add(-30*time.Second).Format(time.RFC3339Nano), id)
+	if err := os.WriteFile(filepath.Join(projects, id+".jsonl"), []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	history := fmt.Sprintf(`{"display":"History title","timestamp":%d,"sessionId":"%s"}`+"\n", generatedAt.Add(-30*time.Second).UnixMilli(), id)
+	if err := os.WriteFile(filepath.Join(tmp, "history.jsonl"), []byte(history), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalHome := claudeHomeDirFunc
+	originalProcesses := listLiveClaudeProcessesVar
+	t.Cleanup(func() {
+		claudeHomeDirFunc = originalHome
+		listLiveClaudeProcessesVar = originalProcesses
+	})
+	claudeHomeDirFunc = func() (string, error) { return tmp, nil }
+	listLiveClaudeProcessesVar = func(context.Context) ([]liveAgentProcess, error) {
+		return []liveAgentProcess{{Provider: providerClaude, PID: 43, TTY: "ttys002", AgeSeconds: 3600, CWD: "/repo"}}, nil
+	}
+
+	sessions, err := collectClaudeSessions(context.Background(), SessionCollectOptions{IncludeDetails: true}, generatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ThreadID != id || sessions[0].PID != 43 || sessions[0].SessionCWD != "/repo" || sessions[0].EffectiveWorkdir != "/repo" || sessions[0].Title != "History title" {
+		t.Fatalf("transcript metadata did not fill the incomplete history entry: %+v", sessions)
+	}
+}
+
 func TestCollectClaudeSessionsWithNoProcessReturnsBeforeFilesystemScan(t *testing.T) {
 	originalHome := claudeHomeDirFunc
 	originalProcesses := listLiveClaudeProcessesVar

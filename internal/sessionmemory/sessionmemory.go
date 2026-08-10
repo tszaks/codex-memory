@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +36,10 @@ const (
 	defaultIndexSafetyBuffer     = 30 * time.Minute
 )
 
-var largeTranscriptThresholdBytes int64 = 100 * 1024 * 1024
+var (
+	largeTranscriptThresholdBytes int64 = 100 * 1024 * 1024
+	errSessionTombstoned                = errors.New("session is tombstoned")
+)
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
@@ -161,18 +165,19 @@ type SearchCitation struct {
 }
 
 type SessionSearchOptions struct {
-	DBPath       string
-	Query        string
-	Limit        int
-	Hybrid       bool
-	Model        string
-	Source       string
-	CWD          string
-	RepoRoot     string
-	GitOriginURL string
-	Files        []string
-	After        time.Time
-	Before       time.Time
+	DBPath               string
+	Query                string
+	Limit                int
+	Hybrid               bool
+	Model                string
+	MinimumSemanticScore float64
+	Source               string
+	CWD                  string
+	RepoRoot             string
+	GitOriginURL         string
+	Files                []string
+	After                time.Time
+	Before               time.Time
 }
 
 type SemanticResult struct {
@@ -437,8 +442,8 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 	cutoff := store.indexCutoff(opts)
 	if provider == "all" || provider == "codex" {
 		state := loadStateMetadata(filepath.Join(opts.CodexHome, "state_5.sqlite"))
-		codexIncludes := append([]string{filepath.Join(opts.CodexHome, "archived_sessions")}, include...)
-		files := findRollouts(filepath.Join(opts.CodexHome, "sessions"), codexIncludes, cutoff)
+		files := findRollouts(filepath.Join(opts.CodexHome, "sessions"), include, cutoff)
+		files = mergeSessionPaths(files, findRollouts(filepath.Join(opts.CodexHome, "archived_sessions"), nil, time.Time{}))
 		for _, file := range files {
 			select {
 			case <-ctx.Done():
@@ -486,6 +491,9 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 				parsed.RawEvents = nil
 			}
 			if err := store.upsert(parsed, state[parsed.Session.ID]); err != nil {
+				if errors.Is(err, errSessionTombstoned) {
+					continue
+				}
 				return count, err
 			}
 			count++
@@ -529,6 +537,9 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 				parsed.RawEvents = nil
 			}
 			if err := store.upsert(parsed, map[string]any{"provider": "claude"}); err != nil {
+				if errors.Is(err, errSessionTombstoned) {
+					continue
+				}
 				return count, err
 			}
 			count++
@@ -538,6 +549,14 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 }
 
 func (s *Store) sessionTombstoned(sessionID, rolloutPath string) (bool, error) {
+	return querySessionTombstone(s.db, sessionID, rolloutPath)
+}
+
+type sessionTombstoneQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func querySessionTombstone(querier sessionTombstoneQuerier, sessionID, rolloutPath string) (bool, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	rolloutPath = strings.TrimSpace(rolloutPath)
 	if rolloutPath != "" {
@@ -547,7 +566,7 @@ func (s *Store) sessionTombstoned(sessionID, rolloutPath string) (bool, error) {
 		return false, nil
 	}
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM codex_session_tombstones
+	err := querier.QueryRow(`SELECT COUNT(*) FROM codex_session_tombstones
 		WHERE (? != '' AND session_id=?) OR (? != '' AND rollout_path=?)`, sessionID, sessionID, rolloutPath, rolloutPath).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("check session deletion tombstone: %w", err)
@@ -689,6 +708,13 @@ func (s *Store) upsert(parsed ParsedSession, metadata map[string]any) error {
 	}
 	sess = sanitizeSession(sess)
 	parsed.Session = sess
+	tombstoned, err := querySessionTombstone(tx, sess.ID, sess.RolloutPath)
+	if err != nil {
+		return err
+	}
+	if tombstoned {
+		return errSessionTombstoned
+	}
 	parsed.SearchBlob = redact(parsed.SearchBlob)
 	capsule := buildSessionCapsule(parsed)
 	chunks := buildContinuityChunks(parsed, capsule)
@@ -1142,6 +1168,22 @@ func findRollouts(root string, include []string, cutoff time.Time) []string {
 	}
 	sort.Strings(files)
 	return files
+}
+
+func mergeSessionPaths(groups ...[]string) []string {
+	seen := map[string]struct{}{}
+	var paths []string
+	for _, group := range groups {
+		for _, path := range group {
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func isCodexRolloutPath(path string) bool {

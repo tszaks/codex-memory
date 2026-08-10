@@ -245,6 +245,31 @@ func TestEmbeddingCredentialLookupFailureStopsBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestEmbeddingReadyReportsCredentialLookupFailure(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "embedding.json")
+	t.Setenv("PALLIUM_EMBED_CONFIG", configPath)
+	for _, key := range []string{"PALLIUM_EMBED_PROVIDER", "PALLIUM_EMBED_BASE_URL", "PALLIUM_EMBED_MODEL", "PALLIUM_EMBED_API_KEY", "OPENAI_API_KEY", "OPENAI_ADMIN_API_KEY"} {
+		t.Setenv(key, "")
+	}
+	if err := writeEmbeddingConfig(configPath, EmbeddingConfig{
+		Provider:        "openai",
+		Model:           DefaultEmbeddingModel,
+		CredentialStore: "keychain",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	originalLookup := embeddingCredentialLookup
+	t.Cleanup(func() { embeddingCredentialLookup = originalLookup })
+	embeddingCredentialLookup = func(string) (string, error) {
+		return "", errors.New("keychain credential unavailable")
+	}
+
+	ready, reason := embeddingReady()
+	if ready || !strings.Contains(reason, "keychain credential unavailable") || strings.Contains(reason, "no OpenAI key") {
+		t.Fatalf("ready=%v reason=%q, want the credential lookup failure", ready, reason)
+	}
+}
+
 func TestConfigureEmbeddingRejectsUnsafeBaseURL(t *testing.T) {
 	t.Setenv("PALLIUM_EMBED_CONFIG", filepath.Join(t.TempDir(), "embedding.json"))
 	_, err := ConfigureEmbedding(EmbeddingConfig{Provider: "custom", Model: "model", BaseURL: "https://user:secret@example.test/v1"})

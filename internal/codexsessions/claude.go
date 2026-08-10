@@ -97,7 +97,8 @@ func collectClaudeSessions(ctx context.Context, opts SessionCollectOptions, gene
 		id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		pathsByID[id] = path
 		summary := SessionSummary{Provider: providerClaude, ThreadID: id, Status: inactiveSessionStatus}
-		if item, ok := history[id]; ok {
+		item, hasHistory := history[id]
+		if hasHistory {
 			summary.Title = compactSummaryText(firstNonEmpty(item.FirstPrompt, item.LastPrompt, id), 240)
 			if opts.IncludeDetails {
 				summary.FirstUserMessage = compactSummaryText(item.FirstPrompt, 500)
@@ -105,11 +106,21 @@ func collectClaudeSessions(ctx context.Context, opts SessionCollectOptions, gene
 			summary.SessionCWD = item.Project
 			summary.EffectiveWorkdir = item.Project
 			summary.LastActiveAt = item.UpdatedAt
-		} else if transcriptSummary, readErr := readClaudeSessionFile(path, opts.IncludeDetails); readErr == nil {
-			summary = transcriptSummary
-		} else if info, statErr := os.Stat(path); statErr == nil {
-			summary.Title = id
-			summary.LastActiveAt = info.ModTime().UTC()
+		}
+		needsTranscript := !hasHistory || summary.Title == "" || summary.SessionCWD == "" || summary.EffectiveWorkdir == "" || summary.LastActiveAt.IsZero() || (opts.IncludeDetails && summary.FirstUserMessage == "")
+		if needsTranscript {
+			if transcriptSummary, readErr := readClaudeSessionFile(path, opts.IncludeDetails); readErr == nil {
+				if hasHistory {
+					mergeMissingClaudeSessionSummary(&summary, transcriptSummary)
+				} else {
+					summary = transcriptSummary
+				}
+			} else if !hasHistory {
+				if info, statErr := os.Stat(path); statErr == nil {
+					summary.Title = id
+					summary.LastActiveAt = info.ModTime().UTC()
+				}
+			}
 		}
 		pathsByID[summary.ThreadID] = path
 		summaries = append(summaries, summary)
@@ -139,6 +150,30 @@ func collectClaudeSessions(ctx context.Context, opts SessionCollectOptions, gene
 	}
 
 	return sessions, nil
+}
+
+func mergeMissingClaudeSessionSummary(summary *SessionSummary, transcript SessionSummary) {
+	if summary.Title == "" {
+		summary.Title = transcript.Title
+	}
+	if summary.FirstUserMessage == "" {
+		summary.FirstUserMessage = transcript.FirstUserMessage
+	}
+	if summary.SessionCWD == "" {
+		summary.SessionCWD = transcript.SessionCWD
+	}
+	if summary.EffectiveWorkdir == "" {
+		summary.EffectiveWorkdir = transcript.EffectiveWorkdir
+	}
+	if summary.LastActiveAt.IsZero() {
+		summary.LastActiveAt = transcript.LastActiveAt
+	}
+	if summary.GitBranch == "" {
+		summary.GitBranch = transcript.GitBranch
+	}
+	if summary.RecentAction == "" {
+		summary.RecentAction = transcript.RecentAction
+	}
 }
 
 func startingClaudeSession(proc liveAgentProcess, generatedAt time.Time) SessionSummary {

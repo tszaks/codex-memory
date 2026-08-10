@@ -129,6 +129,65 @@ func TestRecallRejectsWeakSemanticOnlyCandidate(t *testing.T) {
 	}
 }
 
+func TestRecallFiltersWeakSemanticCandidatesBeforeLimit(t *testing.T) {
+	t.Setenv("PALLIUM_EMBED_PROVIDER", "test-local")
+	path := filepath.Join(t.TempDir(), "sessions.sqlite")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lexical := testParsedSession("lexical-evidence", "orbital jellyfish evidence")
+	lexical.Session.Title = "Orbital jellyfish"
+	lexical.Session.UpdatedAt = "2026-08-07T11:00:00Z"
+	lexical.SearchBlob = "orbital jellyfish"
+	if err := store.upsert(lexical, nil); err != nil {
+		t.Fatal(err)
+	}
+	weak := testParsedSession("weak-semantic", "unrelated newer session")
+	weak.Session.Title = "Unrelated"
+	weak.Session.UpdatedAt = "2026-08-07T12:00:00Z"
+	weak.SearchBlob = "unrelated newer session"
+	if err := store.upsert(weak, nil); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.db.Query(`SELECT id,text_sha256 FROM codex_session_chunks WHERE session_id=?`, weak.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chunks [][2]string
+	for rows.Next() {
+		var chunk [2]string
+		if err := rows.Scan(&chunk[0], &chunk[1]); err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, chunk := range chunks {
+		if _, err := store.db.Exec(`INSERT INTO codex_session_embeddings(chunk_id,provider,model,dim,vector_blob,text_sha256,embedded_at) VALUES(?,?,?,?,?,?,?)`, chunk[0], "test-local", "test-model", 2, packVector([]float64{0.1, 0.995}), chunk[1], "2026-08-07T12:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	originalEmbedTexts := embedTexts
+	t.Cleanup(func() { embedTexts = originalEmbedTexts })
+	embedTexts = func(context.Context, string, []string) ([][]float64, error) {
+		return [][]float64{{1, 0}}, nil
+	}
+	report, err := Recall(context.Background(), RecallOptions{Search: SessionSearchOptions{DBPath: path, Query: "orbital jellyfish", Limit: 1, Model: "test-model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SessionID != lexical.Session.ID || len(report.Matches) != 1 {
+		t.Fatalf("weak semantic candidate displaced exact lexical evidence: %+v", report)
+	}
+}
+
 func TestReadMessagesPagesTranscriptAndLocateSource(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.sqlite")
 	store, err := Open(path)

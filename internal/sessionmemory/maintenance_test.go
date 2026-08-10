@@ -2,6 +2,7 @@ package sessionmemory
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -267,6 +268,39 @@ func TestForgottenSessionIsNotReindexedByForcedSync(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatal("forgotten session reappeared after forced sync")
+	}
+}
+
+func TestUpsertRechecksTombstoneInsideTransaction(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "sessions.sqlite")
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	parsed := testParsedSession("race-session", "must stay forgotten")
+	parsed.Session.RolloutPath = filepath.Join(t.TempDir(), "race-session.jsonl")
+
+	tombstoned, err := store.sessionTombstoned(parsed.Session.ID, parsed.Session.RolloutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tombstoned {
+		t.Fatal("test setup unexpectedly started with a tombstone")
+	}
+	if _, err := store.db.Exec(`INSERT INTO codex_session_tombstones(session_id,source,rollout_path,deleted_at,reason) VALUES(?,?,?,?,?)`, parsed.Session.ID, "codex", parsed.Session.RolloutPath, time.Now().UTC().Format(time.RFC3339Nano), "forget"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.upsert(parsed, nil); !errors.Is(err, errSessionTombstoned) {
+		t.Fatalf("upsert error=%v, want tombstone rejection", err)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM codex_sessions WHERE id=?`, parsed.Session.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("upsert recreated a session after the stale outer tombstone check")
 	}
 }
 

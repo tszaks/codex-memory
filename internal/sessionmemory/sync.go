@@ -132,6 +132,9 @@ func embeddingReady() (bool, string) {
 	if settings.configError != nil {
 		return false, "Embedding skipped because the saved configuration is invalid: " + settings.configError.Error()
 	}
+	if settings.credentialError != nil {
+		return false, "Embedding skipped because the saved credential could not be read: " + settings.credentialError.Error()
+	}
 	if settings.provider == "openai" && strings.Contains(settings.baseURL, "api.openai.com") && settings.apiKey == "" {
 		return false, "Embedding skipped because no OpenAI key is configured. Lexical recall remains available; configure PALLIUM_EMBED_API_KEY or a local provider to enable semantic recall."
 	}

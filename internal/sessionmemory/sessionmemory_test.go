@@ -105,11 +105,24 @@ func TestIndexIncludesArchivedCodexRollouts(t *testing.T) {
 	if err := os.WriteFile(rolloutPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().Add(-10 * time.Minute)
+	now := time.Now()
+	old := now.Add(-3 * time.Hour)
 	if err := os.Chtimes(rolloutPath, old, old); err != nil {
 		t.Fatal(err)
 	}
-	count, err := Index(context.Background(), Options{DBPath: filepath.Join(tmp, "sessions.sqlite"), CodexHome: codexHome, Provider: "codex", Force: true}, nil)
+	dbPath := filepath.Join(tmp, "sessions.sqlite")
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.setEmbeddingCursor(DefaultEmbeddingModel, now.Add(-1*time.Hour)); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	count, err := Index(context.Background(), Options{DBPath: dbPath, CodexHome: codexHome, Provider: "codex", SafetyBuffer: 15 * time.Minute}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

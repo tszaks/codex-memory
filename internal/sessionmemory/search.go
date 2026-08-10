@@ -32,7 +32,11 @@ func SearchWithOptions(ctx context.Context, opts SessionSearchOptions) ([]Search
 		return nil, err
 	}
 	defer store.Close()
-	lexical, err := store.lexicalSearch(opts, min(250, max(50, opts.Limit*8)))
+	candidateLimit := opts.Limit
+	if opts.Hybrid {
+		candidateLimit = min(250, max(50, opts.Limit*8))
+	}
+	lexical, err := store.lexicalSearch(opts, candidateLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +274,9 @@ func (s *Store) lexicalSearch(opts SessionSearchOptions, candidateLimit int) ([]
 	searchExpression := func(expression string) ([]SearchResult, error) {
 		out := make([]SearchResult, 0, candidateLimit)
 		offset := 0
+		pageSize := max(50, candidateLimit)
 		for len(out) < candidateLimit {
-			rows, err := s.lexicalRows(opts, expression, candidateLimit, offset)
+			rows, err := s.lexicalRows(opts, expression, pageSize, offset)
 			if err != nil {
 				return nil, err
 			}
@@ -304,7 +309,7 @@ func (s *Store) lexicalSearch(opts SessionSearchOptions, candidateLimit int) ([]
 					break
 				}
 			}
-			if len(rows) < candidateLimit {
+			if len(rows) < pageSize {
 				break
 			}
 		}
@@ -483,6 +488,16 @@ func (s *Store) hybridSearch(ctx context.Context, opts SessionSearchOptions, lex
 			warning = "Semantic retrieval failed or timed out; lexical results were returned: " + short(err.Error(), 240)
 			semantic = []SearchResult{}
 		}
+	}
+	if opts.MinimumSemanticScore > 0 {
+		credible := semantic[:0]
+		for _, result := range semantic {
+			if result.SemanticScore < opts.MinimumSemanticScore {
+				break
+			}
+			credible = append(credible, result)
+		}
+		semantic = credible
 	}
 	type fusedResult struct {
 		result SearchResult

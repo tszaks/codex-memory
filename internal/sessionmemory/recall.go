@@ -63,6 +63,7 @@ func Recall(ctx context.Context, opts RecallOptions) (RecallReport, error) {
 	}
 	if !opts.LexicalOnly {
 		search.Hybrid = true
+		search.MinimumSemanticScore = minimumRecallSemanticSimilarity
 	}
 	report := RecallReport{
 		Question: strings.TrimSpace(search.Query),
