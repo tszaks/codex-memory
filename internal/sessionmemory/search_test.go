@@ -152,6 +152,31 @@ func TestLexicalOnlySearchStopsAfterRequestedFileMatch(t *testing.T) {
 	}
 }
 
+func TestLexicalSearchCapsExtremeRequestedLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.sqlite")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := testParsedSession("bounded-limit", "billing")
+	parsed.SearchBlob = "billing"
+	if err := store.upsert(parsed, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	results, err := SearchWithOptions(context.Background(), SessionSearchOptions{DBPath: path, Query: "billing", Limit: maxInt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].ID != parsed.Session.ID {
+		t.Fatalf("unexpected extreme-limit result: %+v", results)
+	}
+}
+
 func TestHybridSearchFusesLexicalAndSemanticRanks(t *testing.T) {
 	t.Setenv("PALLIUM_EMBED_PROVIDER", "test-local")
 	path := filepath.Join(t.TempDir(), "sessions.sqlite")

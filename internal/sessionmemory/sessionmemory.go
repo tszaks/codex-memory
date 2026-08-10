@@ -443,7 +443,11 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 	if provider == "all" || provider == "codex" {
 		state := loadStateMetadata(filepath.Join(opts.CodexHome, "state_5.sqlite"))
 		files := findRollouts(filepath.Join(opts.CodexHome, "sessions"), include, cutoff)
-		files = mergeSessionPaths(files, findRollouts(filepath.Join(opts.CodexHome, "archived_sessions"), nil, time.Time{}))
+		archiveCutoff := time.Time{}
+		if !opts.Force && opts.Since > 0 {
+			archiveCutoff = time.Now().Add(-opts.Since)
+		}
+		files = mergeSessionPaths(files, findRollouts(filepath.Join(opts.CodexHome, "archived_sessions"), nil, archiveCutoff))
 		for _, file := range files {
 			select {
 			case <-ctx.Done():
@@ -554,6 +558,67 @@ func (s *Store) sessionTombstoned(sessionID, rolloutPath string) (bool, error) {
 
 type sessionTombstoneQuerier interface {
 	QueryRow(query string, args ...any) *sql.Row
+}
+
+type sessionSQLTransaction interface {
+	sessionTombstoneQuerier
+	Exec(query string, args ...any) (sql.Result, error)
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+type immediateSessionTransaction struct {
+	ctx  context.Context
+	conn *sql.Conn
+	done bool
+}
+
+func (s *Store) beginImmediateSessionTransaction() (*immediateSessionTransaction, error) {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return &immediateSessionTransaction{ctx: ctx, conn: conn}, nil
+}
+
+func (tx *immediateSessionTransaction) Exec(query string, args ...any) (sql.Result, error) {
+	return tx.conn.ExecContext(tx.ctx, query, args...)
+}
+
+func (tx *immediateSessionTransaction) Query(query string, args ...any) (*sql.Rows, error) {
+	return tx.conn.QueryContext(tx.ctx, query, args...)
+}
+
+func (tx *immediateSessionTransaction) QueryRow(query string, args ...any) *sql.Row {
+	return tx.conn.QueryRowContext(tx.ctx, query, args...)
+}
+
+func (tx *immediateSessionTransaction) Commit() error {
+	if tx.done {
+		return sql.ErrTxDone
+	}
+	if _, err := tx.conn.ExecContext(tx.ctx, `COMMIT`); err != nil {
+		return err
+	}
+	tx.done = true
+	return tx.conn.Close()
+}
+
+func (tx *immediateSessionTransaction) Rollback() error {
+	if tx.done {
+		return nil
+	}
+	_, err := tx.conn.ExecContext(tx.ctx, `ROLLBACK`)
+	tx.done = true
+	closeErr := tx.conn.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 func querySessionTombstone(querier sessionTombstoneQuerier, sessionID, rolloutPath string) (bool, error) {
@@ -694,11 +759,6 @@ func parseSessionTime(raw string) time.Time {
 }
 
 func (s *Store) upsert(parsed ParsedSession, metadata map[string]any) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	sess := parsed.Session
 	if sess.Title == "" {
 		sess.Title = short(sess.FirstUserMessage, 240)
@@ -708,6 +768,15 @@ func (s *Store) upsert(parsed ParsedSession, metadata map[string]any) error {
 	}
 	sess = sanitizeSession(sess)
 	parsed.Session = sess
+	parsed.SearchBlob = redact(parsed.SearchBlob)
+	capsule := buildSessionCapsule(parsed)
+	chunks := buildContinuityChunks(parsed, capsule)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.beginImmediateSessionTransaction()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	tombstoned, err := querySessionTombstone(tx, sess.ID, sess.RolloutPath)
 	if err != nil {
 		return err
@@ -715,10 +784,6 @@ func (s *Store) upsert(parsed ParsedSession, metadata map[string]any) error {
 	if tombstoned {
 		return errSessionTombstoned
 	}
-	parsed.SearchBlob = redact(parsed.SearchBlob)
-	capsule := buildSessionCapsule(parsed)
-	chunks := buildContinuityChunks(parsed, capsule)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := removeChangedSessionEmbeddings(tx, sess.ID, chunks); err != nil {
 		return err
 	}
@@ -778,7 +843,7 @@ ON CONFLICT(session_id) DO UPDATE SET schema_version=excluded.schema_version,cap
 	return tx.Commit()
 }
 
-func removeChangedSessionEmbeddings(tx *sql.Tx, sessionID string, chunks []chunkRecord) error {
+func removeChangedSessionEmbeddings(tx sessionSQLTransaction, sessionID string, chunks []chunkRecord) error {
 	currentHashes := make(map[string]string, len(chunks))
 	for _, chunk := range chunks {
 		currentHashes[chunk.ID] = chunk.TextSHA256

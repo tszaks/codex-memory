@@ -32,9 +32,13 @@ func SearchWithOptions(ctx context.Context, opts SessionSearchOptions) ([]Search
 		return nil, err
 	}
 	defer store.Close()
-	candidateLimit := opts.Limit
+	candidateLimit := min(250, opts.Limit)
 	if opts.Hybrid {
-		candidateLimit = min(250, max(50, opts.Limit*8))
+		if opts.Limit >= 32 {
+			candidateLimit = 250
+		} else {
+			candidateLimit = max(50, opts.Limit*8)
+		}
 	}
 	lexical, err := store.lexicalSearch(opts, candidateLimit)
 	if err != nil {
@@ -271,6 +275,7 @@ func (s *Store) lexicalSearch(opts SessionSearchOptions, candidateLimit int) ([]
 	if candidateLimit <= 0 {
 		candidateLimit = max(10, opts.Limit)
 	}
+	candidateLimit = min(250, candidateLimit)
 	searchExpression := func(expression string) ([]SearchResult, error) {
 		out := make([]SearchResult, 0, candidateLimit)
 		offset := 0

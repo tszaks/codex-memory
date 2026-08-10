@@ -304,6 +304,38 @@ func TestUpsertRechecksTombstoneInsideTransaction(t *testing.T) {
 	}
 }
 
+func TestImmediateSessionTransactionOwnsWriterBeforeTombstoneRead(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "sessions.sqlite")
+	writer, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	competitor, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer competitor.Close()
+	if _, err := competitor.db.Exec(`PRAGMA busy_timeout=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := writer.beginImmediateSessionTransaction()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := competitor.db.Exec(`INSERT INTO codex_session_tombstones(session_id,deleted_at,reason) VALUES('concurrent-delete','2026-08-10T00:00:00Z','forget')`); err == nil {
+		t.Fatal("competing tombstone writer was not serialized behind the immediate transaction")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := competitor.db.Exec(`INSERT INTO codex_session_tombstones(session_id,deleted_at,reason) VALUES('concurrent-delete','2026-08-10T00:00:00Z','forget')`); err != nil {
+		t.Fatalf("competing tombstone writer did not proceed after rollback: %v", err)
+	}
+}
+
 func TestSemanticIgnoresStaleHashEmbeddings(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PALLIUM_EMBED_PROVIDER", "openai")
