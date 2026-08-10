@@ -396,6 +396,16 @@ CREATE TABLE IF NOT EXISTS codex_session_capsules (
   search_text TEXT NOT NULL,
   generated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS codex_session_tombstones (
+  session_id TEXT PRIMARY KEY,
+  source TEXT,
+  rollout_path TEXT,
+  deleted_at TEXT NOT NULL,
+  reason TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_codex_session_tombstones_rollout_path
+  ON codex_session_tombstones(rollout_path)
+  WHERE rollout_path IS NOT NULL AND rollout_path != '';
 `)
 	return err
 }
@@ -435,6 +445,13 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 				return count, ctx.Err()
 			default:
 			}
+			tombstoned, err := store.sessionTombstoned("", file)
+			if err != nil {
+				return count, err
+			}
+			if tombstoned {
+				continue
+			}
 			skip, err := store.rolloutSkipReason(file, opts.Force)
 			if err != nil {
 				return count, err
@@ -454,6 +471,13 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 			parsed, err := parseRollout(file)
 			if err != nil {
 				return count, fmt.Errorf("parse %s: %w", file, err)
+			}
+			tombstoned, err = store.sessionTombstoned(parsed.Session.ID, file)
+			if err != nil {
+				return count, err
+			}
+			if tombstoned {
+				continue
 			}
 			mergeState(&parsed.Session, state[parsed.Session.ID])
 			parsed.Session.Machine = opts.Machine
@@ -475,6 +499,13 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 				return count, ctx.Err()
 			default:
 			}
+			tombstoned, err := store.sessionTombstoned("", file)
+			if err != nil {
+				return count, err
+			}
+			if tombstoned {
+				continue
+			}
 			skip, err := store.rolloutSkipReason(file, opts.Force)
 			if err != nil {
 				return count, err
@@ -485,6 +516,13 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 			parsed, err := parseClaudeTranscript(file)
 			if err != nil {
 				return count, fmt.Errorf("parse %s: %w", file, err)
+			}
+			tombstoned, err = store.sessionTombstoned(parsed.Session.ID, file)
+			if err != nil {
+				return count, err
+			}
+			if tombstoned {
+				continue
 			}
 			parsed.Session.Machine = opts.Machine
 			if !opts.StoreRawEvents {
@@ -497,6 +535,24 @@ func Index(ctx context.Context, opts Options, include []string) (int, error) {
 		}
 	}
 	return count, nil
+}
+
+func (s *Store) sessionTombstoned(sessionID, rolloutPath string) (bool, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	rolloutPath = strings.TrimSpace(rolloutPath)
+	if rolloutPath != "" {
+		rolloutPath = filepath.Clean(rolloutPath)
+	}
+	if sessionID == "" && rolloutPath == "" {
+		return false, nil
+	}
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM codex_session_tombstones
+		WHERE (? != '' AND session_id=?) OR (? != '' AND rollout_path=?)`, sessionID, sessionID, rolloutPath, rolloutPath).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check session deletion tombstone: %w", err)
+	}
+	return count > 0, nil
 }
 
 func (s *Store) indexCutoff(opts Options) time.Time {

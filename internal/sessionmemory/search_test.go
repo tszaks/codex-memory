@@ -3,6 +3,7 @@ package sessionmemory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -68,6 +69,52 @@ func TestSearchHandlesPunctuationFiltersAndCompactResults(t *testing.T) {
 	}
 	if len(payload) > 20_000 {
 		t.Fatalf("compact search emitted %d bytes, want <= 20000", len(payload))
+	}
+}
+
+func TestSearchFileFilterContinuesPastInitialLexicalCandidates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.sqlite")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 70; i++ {
+		parsed := testParsedSession(fmt.Sprintf("distractor-%03d", i), strings.Repeat("billing ", 12))
+		parsed.Session.Title = strings.Repeat("Billing ", 8)
+		parsed.SearchBlob = strings.Repeat("billing ", 20)
+		if err := store.upsert(parsed, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := testParsedSession("file-target", "target result")
+	target.Session.Title = "Target session"
+	target.Session.FilesTouched = []string{"src/target.go"}
+	target.SearchBlob = "billing"
+	if err := store.upsert(target, nil); err != nil {
+		t.Fatal(err)
+	}
+	firstPage, err := store.lexicalRows(SessionSearchOptions{}, `"billing"`, 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(firstPage, func(row lexicalRow) bool { return row.sessionID == target.Session.ID }) {
+		t.Fatal("test setup did not rank the file target below the initial candidate page")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := SearchWithOptions(context.Background(), SessionSearchOptions{
+		DBPath: path,
+		Query:  "billing",
+		Limit:  1,
+		Files:  []string{"src/target.go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].ID != target.Session.ID {
+		t.Fatalf("file-filtered target was lost after the initial candidate page: %+v", results)
 	}
 }
 

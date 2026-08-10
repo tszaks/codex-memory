@@ -54,6 +54,8 @@ type RecallReport struct {
 	Matches          []RecallMatch    `json:"matches"`
 }
 
+const minimumRecallSemanticSimilarity = 0.35
+
 func Recall(ctx context.Context, opts RecallOptions) (RecallReport, error) {
 	search := opts.Search
 	if search.Limit <= 0 {
@@ -81,6 +83,7 @@ func Recall(ctx context.Context, opts RecallOptions) (RecallReport, error) {
 	if err != nil {
 		return report, err
 	}
+	results = credibleRecallResults(results)
 	if len(results) == 0 {
 		report.Confidence.Reasons = append(report.Confidence.Reasons, "No matching indexed sessions were found.")
 		report.CoverageWarnings = append(report.CoverageWarnings, "Recall has no evidence for this question. Run `pallium sessions sync` or broaden the filters.")
@@ -133,10 +136,12 @@ func Recall(ctx context.Context, opts RecallOptions) (RecallReport, error) {
 func recallConfidence(primary SearchResult, report RecallReport) RecallConfidence {
 	score := 0.35
 	reasons := []string{"A matching indexed session was found."}
-	if containsString(primary.Signals, "lexical") && containsString(primary.Signals, "semantic") {
+	lexicalMatch := containsString(primary.Signals, "lexical")
+	semanticMatch := containsString(primary.Signals, "semantic") && primary.SemanticScore >= minimumRecallSemanticSimilarity
+	if lexicalMatch && semanticMatch {
 		score += 0.25
 		reasons = append(reasons, "Lexical and semantic retrieval independently matched the same session.")
-	} else if containsString(primary.Signals, "lexical") || containsString(primary.Signals, "semantic") {
+	} else if lexicalMatch || semanticMatch {
 		score += 0.1
 		reasons = append(reasons, "One retrieval method matched the session.")
 	}
@@ -165,6 +170,16 @@ func recallConfidence(primary SearchResult, report RecallReport) RecallConfidenc
 		level = "medium"
 	}
 	return RecallConfidence{Level: level, Score: score, Reasons: reasons}
+}
+
+func credibleRecallResults(results []SearchResult) []SearchResult {
+	credible := make([]SearchResult, 0, len(results))
+	for _, result := range results {
+		if containsString(result.Signals, "lexical") || (containsString(result.Signals, "semantic") && result.SemanticScore >= minimumRecallSemanticSimilarity) {
+			credible = append(credible, result)
+		}
+	}
+	return credible
 }
 
 func containsString(values []string, target string) bool {

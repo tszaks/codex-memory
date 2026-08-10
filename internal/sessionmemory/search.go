@@ -267,43 +267,61 @@ func (s *Store) lexicalSearch(opts SessionSearchOptions, candidateLimit int) ([]
 	if candidateLimit <= 0 {
 		candidateLimit = max(10, opts.Limit)
 	}
-	rows, err := s.lexicalRows(opts, quotedFTSTerms(terms, " AND "), candidateLimit)
+	searchExpression := func(expression string) ([]SearchResult, error) {
+		out := make([]SearchResult, 0, candidateLimit)
+		offset := 0
+		for len(out) < candidateLimit {
+			rows, err := s.lexicalRows(opts, expression, candidateLimit, offset)
+			if err != nil {
+				return nil, err
+			}
+			if len(rows) == 0 {
+				break
+			}
+			offset += len(rows)
+			for _, row := range rows {
+				sess, err := s.loadSession(row.sessionID)
+				if err != nil {
+					return nil, err
+				}
+				if !matchesFileFilters(sess, opts.Files) {
+					continue
+				}
+				path := sess.RolloutPath
+				result := SearchResult{
+					Session:      compactSearchSession(sess),
+					Rank:         row.rank,
+					LexicalScore: 1 / (1 + math.Abs(row.rank)),
+					Snippet:      short(row.snippet, 700),
+					Signals:      []string{"lexical"},
+					Citation:     SearchCitation{SessionID: sess.ID, Source: sess.Source, UpdatedAt: first(sess.UpdatedAt, sess.CreatedAt), RolloutPath: path},
+					Coverage:     SessionCoverage{Mode: "unknown"},
+					Warnings:     []string{},
+				}
+				applyCapsuleToSearchResult(&result, row.capsule)
+				out = append(out, result)
+				if len(out) >= candidateLimit {
+					break
+				}
+			}
+			if len(rows) < candidateLimit {
+				break
+			}
+		}
+		return out, nil
+	}
+
+	out, err := searchExpression(quotedFTSTerms(terms, " AND "))
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 && len(terms) > 1 {
-		rows, err = s.lexicalRows(opts, quotedFTSTerms(terms, " OR "), candidateLimit)
-		if err != nil {
-			return nil, err
-		}
-	}
-	out := make([]SearchResult, 0, len(rows))
-	for _, row := range rows {
-		sess, err := s.loadSession(row.sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if !matchesFileFilters(sess, opts.Files) {
-			continue
-		}
-		path := sess.RolloutPath
-		result := SearchResult{
-			Session:      compactSearchSession(sess),
-			Rank:         row.rank,
-			LexicalScore: 1 / (1 + math.Abs(row.rank)),
-			Snippet:      short(row.snippet, 700),
-			Signals:      []string{"lexical"},
-			Citation:     SearchCitation{SessionID: sess.ID, Source: sess.Source, UpdatedAt: first(sess.UpdatedAt, sess.CreatedAt), RolloutPath: path},
-			Coverage:     SessionCoverage{Mode: "unknown"},
-			Warnings:     []string{},
-		}
-		applyCapsuleToSearchResult(&result, row.capsule)
-		out = append(out, result)
+	if len(out) == 0 && len(terms) > 1 {
+		return searchExpression(quotedFTSTerms(terms, " OR "))
 	}
 	return out, nil
 }
 
-func (s *Store) lexicalRows(opts SessionSearchOptions, expression string, limit int) ([]lexicalRow, error) {
+func (s *Store) lexicalRows(opts SessionSearchOptions, expression string, limit, offset int) ([]lexicalRow, error) {
 	filterSQL, filterArgs := sessionFilterSQL(opts)
 	query := `SELECT codex_session_fts.session_id,
 		bm25(codex_session_fts,0.0,8.0,4.0,3.0,3.0,3.0,2.0,1.0) AS rank,
@@ -312,10 +330,10 @@ func (s *Store) lexicalRows(opts SessionSearchOptions, expression string, limit 
 	FROM codex_session_fts
 	JOIN codex_sessions s ON s.id=codex_session_fts.session_id
 	LEFT JOIN codex_session_capsules c ON c.session_id=s.id
-	WHERE codex_session_fts MATCH ?` + filterSQL + ` ORDER BY rank LIMIT ?`
+	WHERE codex_session_fts MATCH ?` + filterSQL + ` ORDER BY rank,codex_session_fts.session_id LIMIT ? OFFSET ?`
 	args := []any{expression}
 	args = append(args, filterArgs...)
-	args = append(args, limit)
+	args = append(args, limit, offset)
 	dbRows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err

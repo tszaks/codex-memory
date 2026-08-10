@@ -137,6 +137,8 @@ func TestForgetSessionRequiresConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsed := testParsedSession("forget-me-1234", "answer")
+	parsed.Session.Source = "claude"
+	parsed.Session.RolloutPath = filepath.Join(t.TempDir(), "forget-me-1234.jsonl")
 	if err := store.upsert(parsed, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +176,12 @@ func TestForgetSessionRequiresConfirmation(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("session remains after confirmed forget")
 	}
+	if err := verify.db.QueryRow(`SELECT COUNT(*) FROM codex_session_tombstones WHERE session_id='forget-me-1234' AND reason='forget'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("forget did not preserve a deletion tombstone")
+	}
 }
 
 func TestPruneSessionsRequiresConfirmation(t *testing.T) {
@@ -205,6 +213,60 @@ func TestPruneSessionsRequiresConfirmation(t *testing.T) {
 	}
 	if confirmed.Deleted != 1 || !confirmed.Confirmed {
 		t.Fatalf("unexpected confirmed retention: %+v", confirmed)
+	}
+	verify, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer verify.Close()
+	var count int
+	if err := verify.db.QueryRow(`SELECT COUNT(*) FROM codex_session_tombstones WHERE session_id='old-session' AND reason='retention'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("prune did not preserve a deletion tombstone")
+	}
+}
+
+func TestForgottenSessionIsNotReindexedByForcedSync(t *testing.T) {
+	tmp := t.TempDir()
+	claudeHome := filepath.Join(tmp, ".claude")
+	transcript := filepath.Join(claudeHome, "projects", "repo", "forgotten-session.jsonl")
+	writeJSONLines(t, transcript, []any{
+		map[string]any{"type": "user", "sessionId": "forgotten-session", "cwd": "/repo", "message": map[string]any{"role": "user", "content": "forget this session"}},
+		map[string]any{"type": "assistant", "sessionId": "forgotten-session", "cwd": "/repo", "message": map[string]any{"role": "assistant", "content": "done"}},
+	})
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(transcript, old, old); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(tmp, "sessions.sqlite")
+	opts := Options{DBPath: dbPath, ClaudeHome: claudeHome, Provider: "claude", Force: true, Machine: "test-host"}
+	indexed, err := Index(context.Background(), opts, nil)
+	if err != nil || indexed != 1 {
+		t.Fatalf("initial index: indexed=%d err=%v", indexed, err)
+	}
+	if _, err := ForgetSession(dbPath, "forgotten-session", true); err != nil {
+		t.Fatal(err)
+	}
+	indexed, err = Index(context.Background(), opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if indexed != 0 {
+		t.Fatalf("forced sync reindexed a forgotten session: %d", indexed)
+	}
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM codex_sessions WHERE id='forgotten-session'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("forgotten session reappeared after forced sync")
 	}
 }
 

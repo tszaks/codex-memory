@@ -78,6 +78,57 @@ func TestRecallEmptyResultUsesStableEmptyArrays(t *testing.T) {
 	}
 }
 
+func TestRecallRejectsWeakSemanticOnlyCandidate(t *testing.T) {
+	t.Setenv("PALLIUM_EMBED_PROVIDER", "test-local")
+	path := filepath.Join(t.TempDir(), "sessions.sqlite")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := testParsedSession("unrelated-session", "checkout migration completed")
+	parsed.Session.Title = "Checkout migration"
+	parsed.SearchBlob = "checkout migration"
+	if err := store.upsert(parsed, nil); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.db.Query(`SELECT id,text_sha256 FROM codex_session_chunks WHERE session_id=?`, parsed.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chunks [][2]string
+	for rows.Next() {
+		var chunk [2]string
+		if err := rows.Scan(&chunk[0], &chunk[1]); err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, chunk := range chunks {
+		if _, err := store.db.Exec(`INSERT INTO codex_session_embeddings(chunk_id,provider,model,dim,vector_blob,text_sha256,embedded_at) VALUES(?,?,?,?,?,?,?)`, chunk[0], "test-local", "test-model", 2, packVector([]float64{0.1, 0.995}), chunk[1], "2026-08-07T12:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	originalEmbedTexts := embedTexts
+	t.Cleanup(func() { embedTexts = originalEmbedTexts })
+	embedTexts = func(context.Context, string, []string) ([][]float64, error) {
+		return [][]float64{{1, 0}}, nil
+	}
+	report, err := Recall(context.Background(), RecallOptions{Search: SessionSearchOptions{DBPath: path, Query: "orbital jellyfish", Model: "test-model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SessionID != "" || len(report.Matches) != 0 || report.Confidence.Level != "low" {
+		t.Fatalf("weak semantic-only match produced a continuation: %+v", report)
+	}
+}
+
 func TestReadMessagesPagesTranscriptAndLocateSource(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.sqlite")
 	store, err := Open(path)

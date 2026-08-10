@@ -169,6 +169,9 @@ func openAICompatibleEmbeddings(ctx context.Context, model string, texts []strin
 	if s.configError != nil {
 		return nil, s.configError
 	}
+	if s.credentialError != nil {
+		return nil, s.credentialError
+	}
 	if s.apiKey == "" && strings.Contains(s.baseURL, "api.openai.com") {
 		return nil, errors.New("OpenAI embeddings require OPENAI_API_KEY or PALLIUM_EMBED_API_KEY; set PALLIUM_EMBED_PROVIDER=ollama (or another local provider) to run without a key")
 	}

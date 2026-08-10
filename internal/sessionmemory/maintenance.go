@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -61,6 +62,12 @@ type SessionPruneResult struct {
 	Matched   int    `json:"matched"`
 	Confirmed bool   `json:"confirmed"`
 	Deleted   int    `json:"deleted"`
+}
+
+type sessionDeletionTarget struct {
+	ID          string
+	Source      string
+	RolloutPath string
 }
 
 func DoctorSessions(opts SessionDoctorOptions) (SessionDoctorReport, error) {
@@ -273,7 +280,8 @@ func ForgetSession(dbPath, prefix string, confirm bool) (ForgetResult, error) {
 		return ForgetResult{}, err
 	}
 	result := ForgetResult{SessionID: sessionID, Confirmed: confirm}
-	if err := store.db.QueryRow(`SELECT title FROM codex_sessions WHERE id=?`, sessionID).Scan(&result.Title); err != nil {
+	target := sessionDeletionTarget{ID: sessionID}
+	if err := store.db.QueryRow(`SELECT title,COALESCE(source,''),COALESCE(rollout_path,'') FROM codex_sessions WHERE id=?`, sessionID).Scan(&result.Title, &target.Source, &target.RolloutPath); err != nil {
 		return result, err
 	}
 	_ = store.db.QueryRow(`SELECT COUNT(*) FROM codex_session_messages WHERE session_id=?`, sessionID).Scan(&result.Messages)
@@ -288,7 +296,7 @@ func ForgetSession(dbPath, prefix string, confirm bool) (ForgetResult, error) {
 		return result, err
 	}
 	defer tx.Rollback()
-	if err := deleteSessionTx(tx, sessionID); err != nil {
+	if err := deleteSessionTx(tx, target, "forget"); err != nil {
 		return result, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -309,24 +317,24 @@ func PruneSessions(dbPath string, olderThan time.Duration, confirm bool) (Sessio
 	defer store.Close()
 	cutoff := time.Now().UTC().Add(-olderThan).Format(time.RFC3339Nano)
 	result := SessionPruneResult{Cutoff: cutoff, Confirmed: confirm}
-	rows, err := store.db.Query(`SELECT id FROM codex_sessions WHERE COALESCE(NULLIF(updated_at,''), NULLIF(created_at,''), indexed_at) < ? ORDER BY COALESCE(NULLIF(updated_at,''), NULLIF(created_at,''), indexed_at)`, cutoff)
+	rows, err := store.db.Query(`SELECT id,COALESCE(source,''),COALESCE(rollout_path,'') FROM codex_sessions WHERE COALESCE(NULLIF(updated_at,''), NULLIF(created_at,''), indexed_at) < ? ORDER BY COALESCE(NULLIF(updated_at,''), NULLIF(created_at,''), indexed_at)`, cutoff)
 	if err != nil {
 		return result, err
 	}
-	var ids []string
+	var targets []sessionDeletionTarget
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var target sessionDeletionTarget
+		if err := rows.Scan(&target.ID, &target.Source, &target.RolloutPath); err != nil {
 			_ = rows.Close()
 			return result, err
 		}
-		ids = append(ids, id)
+		targets = append(targets, target)
 	}
 	if err := rows.Close(); err != nil {
 		return result, err
 	}
-	result.Matched = len(ids)
-	if !confirm || len(ids) == 0 {
+	result.Matched = len(targets)
+	if !confirm || len(targets) == 0 {
 		return result, nil
 	}
 	tx, err := store.db.Begin()
@@ -334,8 +342,8 @@ func PruneSessions(dbPath string, olderThan time.Duration, confirm bool) (Sessio
 		return result, err
 	}
 	defer tx.Rollback()
-	for _, id := range ids {
-		if err := deleteSessionTx(tx, id); err != nil {
+	for _, target := range targets {
+		if err := deleteSessionTx(tx, target, "retention"); err != nil {
 			return result, err
 		}
 		result.Deleted++
@@ -346,7 +354,16 @@ func PruneSessions(dbPath string, olderThan time.Duration, confirm bool) (Sessio
 	return result, nil
 }
 
-func deleteSessionTx(tx *sql.Tx, sessionID string) error {
+func deleteSessionTx(tx *sql.Tx, target sessionDeletionTarget, reason string) error {
+	rolloutPath := target.RolloutPath
+	if strings.TrimSpace(rolloutPath) != "" {
+		rolloutPath = filepath.Clean(rolloutPath)
+	}
+	if _, err := tx.Exec(`INSERT INTO codex_session_tombstones(session_id,source,rollout_path,deleted_at,reason) VALUES(?,?,?,?,?)
+		ON CONFLICT(session_id) DO UPDATE SET source=excluded.source,rollout_path=excluded.rollout_path,deleted_at=excluded.deleted_at,reason=excluded.reason`,
+		target.ID, target.Source, rolloutPath, time.Now().UTC().Format(time.RFC3339Nano), reason); err != nil {
+		return fmt.Errorf("record session deletion tombstone: %w", err)
+	}
 	statements := []string{
 		`DELETE FROM codex_session_embeddings WHERE chunk_id IN (SELECT id FROM codex_session_chunks WHERE session_id=?)`,
 		`DELETE FROM codex_session_chunks WHERE session_id=?`,
@@ -358,7 +375,7 @@ func deleteSessionTx(tx *sql.Tx, sessionID string) error {
 		`DELETE FROM codex_sessions WHERE id=?`,
 	}
 	for _, statement := range statements {
-		if _, err := tx.Exec(statement, sessionID); err != nil {
+		if _, err := tx.Exec(statement, target.ID); err != nil {
 			return err
 		}
 	}

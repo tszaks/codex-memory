@@ -77,6 +77,44 @@ func TestCollectClaudeSessionsUsesHistoryWithoutScanningTranscript(t *testing.T)
 	}
 }
 
+func TestCollectClaudeSessionsFallsBackToTranscriptMetadataWithoutHistory(t *testing.T) {
+	tmp := t.TempDir()
+	projects := filepath.Join(tmp, "projects", "-repo")
+	if err := os.MkdirAll(projects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "1ee0f2e6-b212-4dad-8abd-f6fe1e2d0966"
+	generatedAt := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	transcript := fmt.Sprintf(`{"type":"user","timestamp":"%s","sessionId":"%s","cwd":"/repo","gitBranch":"main","message":{"role":"user","content":"Resume the continuity work"}}`+"\n", generatedAt.Add(-30*time.Second).Format(time.RFC3339Nano), id)
+	path := filepath.Join(projects, id+".jsonl")
+	if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := generatedAt.Add(-30 * time.Second)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	originalHome := claudeHomeDirFunc
+	originalProcesses := listLiveClaudeProcessesVar
+	t.Cleanup(func() {
+		claudeHomeDirFunc = originalHome
+		listLiveClaudeProcessesVar = originalProcesses
+	})
+	claudeHomeDirFunc = func() (string, error) { return tmp, nil }
+	listLiveClaudeProcessesVar = func(context.Context) ([]liveAgentProcess, error) {
+		return []liveAgentProcess{{Provider: providerClaude, PID: 42, TTY: "ttys001", AgeSeconds: 3600, CWD: "/repo"}}, nil
+	}
+
+	sessions, err := collectClaudeSessions(context.Background(), SessionCollectOptions{IncludeDetails: true}, generatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ThreadID != id || sessions[0].PID != 42 || sessions[0].SessionCWD != "/repo" || sessions[0].Title != "Resume the continuity work" {
+		t.Fatalf("transcript metadata did not recover the live Claude session: %+v", sessions)
+	}
+}
+
 func TestCollectClaudeSessionsWithNoProcessReturnsBeforeFilesystemScan(t *testing.T) {
 	originalHome := claudeHomeDirFunc
 	originalProcesses := listLiveClaudeProcessesVar

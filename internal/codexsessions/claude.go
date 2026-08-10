@@ -105,10 +105,13 @@ func collectClaudeSessions(ctx context.Context, opts SessionCollectOptions, gene
 			summary.SessionCWD = item.Project
 			summary.EffectiveWorkdir = item.Project
 			summary.LastActiveAt = item.UpdatedAt
+		} else if transcriptSummary, readErr := readClaudeSessionFile(path, opts.IncludeDetails); readErr == nil {
+			summary = transcriptSummary
 		} else if info, statErr := os.Stat(path); statErr == nil {
 			summary.Title = id
 			summary.LastActiveAt = info.ModTime().UTC()
 		}
+		pathsByID[summary.ThreadID] = path
 		summaries = append(summaries, summary)
 	}
 

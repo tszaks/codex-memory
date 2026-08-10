@@ -2,6 +2,7 @@ package sessionmemory
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -204,6 +205,43 @@ func TestExplicitPalliumKeyOverridesConfiguredKeychain(t *testing.T) {
 	settings := resolveEmbeddingSettings()
 	if settings.apiKey != "one-run-key" || settings.apiKeySource != "environment:PALLIUM_EMBED_API_KEY" {
 		t.Fatalf("unexpected explicit override: key=%q source=%q", settings.apiKey, settings.apiKeySource)
+	}
+}
+
+func TestEmbeddingCredentialLookupFailureStopsBeforeNetwork(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"embedding":[1,0]}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	configPath := filepath.Join(t.TempDir(), "embedding.json")
+	t.Setenv("PALLIUM_EMBED_CONFIG", configPath)
+	for _, key := range []string{"PALLIUM_EMBED_PROVIDER", "PALLIUM_EMBED_BASE_URL", "PALLIUM_EMBED_MODEL", "PALLIUM_EMBED_API_KEY", "OPENAI_API_KEY", "OPENAI_ADMIN_API_KEY"} {
+		t.Setenv(key, "")
+	}
+	if err := writeEmbeddingConfig(configPath, EmbeddingConfig{
+		Provider:        "openai",
+		Model:           DefaultEmbeddingModel,
+		BaseURL:         server.URL + "/v1",
+		CredentialStore: "keychain",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	originalLookup := embeddingCredentialLookup
+	t.Cleanup(func() { embeddingCredentialLookup = originalLookup })
+	embeddingCredentialLookup = func(string) (string, error) {
+		return "", errors.New("keychain credential unavailable")
+	}
+
+	_, err := openAICompatibleEmbeddings(context.Background(), DefaultEmbeddingModel, []string{"probe"})
+	if err == nil || !strings.Contains(err.Error(), "keychain credential unavailable") {
+		t.Fatalf("error=%v, want keychain lookup failure", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("requests=%d, want no unauthenticated request", requests.Load())
 	}
 }
 
