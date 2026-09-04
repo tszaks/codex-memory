@@ -57,8 +57,9 @@ var (
 )
 
 type SessionCollectOptions struct {
-	IncludeAll     bool
-	IncludeDetails bool
+	IncludeAll        bool
+	IncludeDetails    bool
+	IncludeCompletion bool
 }
 
 type SessionSnapshot struct {
@@ -85,26 +86,28 @@ type ProviderCoverage struct {
 }
 
 type SessionSummary struct {
-	Provider         string    `json:"provider,omitempty"`
-	PID              int       `json:"pid,omitempty"`
-	PPID             int       `json:"ppid,omitempty"`
-	TTY              string    `json:"tty,omitempty"`
-	ProcessState     string    `json:"process_state,omitempty"`
-	AgeSeconds       int64     `json:"age_seconds,omitempty"`
-	ThreadID         string    `json:"thread_id,omitempty"`
-	Title            string    `json:"title,omitempty"`
-	FirstUserMessage string    `json:"first_user_message,omitempty"`
-	SessionCWD       string    `json:"session_cwd,omitempty"`
-	EffectiveWorkdir string    `json:"effective_workdir,omitempty"`
-	LastActiveAt     time.Time `json:"last_active_at,omitempty"`
-	GitBranch        string    `json:"git_branch,omitempty"`
-	GitOriginURL     string    `json:"git_origin_url,omitempty"`
-	Status           string    `json:"status"`
-	StatusReason     string    `json:"status_reason,omitempty"`
-	StatusSource     string    `json:"status_source,omitempty"`
-	StatusConfidence string    `json:"status_confidence,omitempty"`
-	StatusSince      time.Time `json:"status_since,omitempty"`
-	RecentAction     string    `json:"recent_action,omitempty"`
+	Provider         string     `json:"provider,omitempty"`
+	PID              int        `json:"pid,omitempty"`
+	PPID             int        `json:"ppid,omitempty"`
+	TTY              string     `json:"tty,omitempty"`
+	ProcessState     string     `json:"process_state,omitempty"`
+	AgeSeconds       int64      `json:"age_seconds,omitempty"`
+	ThreadID         string     `json:"thread_id,omitempty"`
+	Title            string     `json:"title,omitempty"`
+	FirstUserMessage string     `json:"first_user_message,omitempty"`
+	SessionCWD       string     `json:"session_cwd,omitempty"`
+	EffectiveWorkdir string     `json:"effective_workdir,omitempty"`
+	LastActiveAt     time.Time  `json:"last_active_at,omitempty"`
+	GitBranch        string     `json:"git_branch,omitempty"`
+	GitOriginURL     string     `json:"git_origin_url,omitempty"`
+	Status           string     `json:"status"`
+	StatusReason     string     `json:"status_reason,omitempty"`
+	StatusSource     string     `json:"status_source,omitempty"`
+	StatusConfidence string     `json:"status_confidence,omitempty"`
+	StatusSince      time.Time  `json:"status_since,omitempty"`
+	CompletionStatus string     `json:"completion_status,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	RecentAction     string     `json:"recent_action,omitempty"`
 }
 
 type liveAgentProcess struct {
@@ -341,6 +344,9 @@ func collectCodexSessions(ctx context.Context, opts SessionCollectOptions, gener
 			}
 			session := SessionSummary{Provider: providerCodex, ThreadID: row.ID, Status: inactiveSessionStatus}
 			enrichSession(&session, row, logsByThread[row.ID], opts.IncludeDetails)
+			if opts.IncludeCompletion {
+				enrichCodexSessionCompletion(&session, row.RolloutPath, generatedAt)
+			}
 			sessions = append(sessions, session)
 		}
 	}
@@ -392,6 +398,8 @@ func collectCodexSessionsWithoutLogs(ctx context.Context, dbPath string, opts Se
 		}
 		if session.PID > 0 {
 			enrichCodexSessionFromRollout(&session, rolloutPathsByID[session.ThreadID], opts.IncludeDetails, generatedAt)
+		} else if opts.IncludeCompletion {
+			enrichCodexSessionCompletion(&session, rolloutPathsByID[session.ThreadID], generatedAt)
 		}
 		sessions = append(sessions, session)
 		seen[session.ThreadID] = true
@@ -472,6 +480,19 @@ func enrichCodexSessionFromRollout(session *SessionSummary, rolloutPath string, 
 	}
 	if includeDetails && details.RecentAction != "" {
 		session.RecentAction = details.RecentAction
+	}
+	applySessionState(session, details.Signals, generatedAt)
+}
+
+func enrichCodexSessionCompletion(session *SessionSummary, rolloutPath string, generatedAt time.Time) {
+	if rolloutPath == "" {
+		applySessionState(session, sessionSignals{}, generatedAt)
+		return
+	}
+	details, err := readCodexRolloutTailDetails(rolloutPath, 128*1024)
+	if err != nil {
+		applySessionState(session, sessionSignals{}, generatedAt)
+		return
 	}
 	applySessionState(session, details.Signals, generatedAt)
 }
@@ -623,13 +644,36 @@ func readCodexRolloutDetails(path string) (rolloutDetails, error) {
 		return rolloutDetails{}, err
 	}
 	defer file.Close()
+	return parseCodexRolloutDetails(bufio.NewReader(file))
+}
 
+func readCodexRolloutTailDetails(path string, tailBytes int64) (rolloutDetails, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return rolloutDetails{}, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return rolloutDetails{}, err
+	}
+	start := max(int64(0), info.Size()-tailBytes)
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return rolloutDetails{}, err
+	}
+	reader := bufio.NewReader(file)
+	if start > 0 {
+		_, _ = reader.ReadBytes('\n')
+	}
+	return parseCodexRolloutDetails(reader)
+}
+
+func parseCodexRolloutDetails(reader *bufio.Reader) (rolloutDetails, error) {
 	details := rolloutDetails{Signals: sessionSignals{Source: "codex-transcript"}}
 	pending := map[string]struct {
 		name string
 		at   time.Time
 	}{}
-	reader := bufio.NewReader(file)
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		trimmed := bytes.TrimSpace(line)

@@ -139,6 +139,8 @@ func collectClaudeSessions(ctx context.Context, opts SessionCollectOptions, gene
 			enrichClaudeSessionFromTail(&session, pathsByID[session.ThreadID], opts.IncludeDetails, generatedAt)
 		} else if !opts.IncludeAll {
 			continue
+		} else if opts.IncludeCompletion {
+			enrichClaudeSessionFromTail(&session, pathsByID[session.ThreadID], false, generatedAt)
 		}
 		sessions = append(sessions, session)
 		seen[session.ThreadID] = true

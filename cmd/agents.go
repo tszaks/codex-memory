@@ -24,7 +24,7 @@ const agentsBlock = agentsBlockBegin + "\n" +
 	"\n" +
 	"This machine has Pallium: a local control plane for coding agents (workflows, loops, agent teams, repo memory, verification, session state — kept outside your context window).\n" +
 	"\n" +
-	"For every nontrivial task where Pallium may help, choose the service yourself instead of asking the user which Pallium command to run. Start with `pallium route \"<task>\" --authority <observe|execute|edit|external> --json`. Supply only the authority ceiling already granted by the user or environment. Routing may recommend a stronger action, but it never widens authority; follow the returned command only when `allowed` is true and the action remains inside the user's intent.\n" +
+	"For every nontrivial task where Pallium may help, choose the service yourself instead of asking the user which Pallium command to run. Start with `pallium route \"<task>\" --authority <observe|execute|edit|external> --execute --json`. Supply only the authority ceiling already granted by the user or environment. Routing may recommend a stronger action, but it never widens authority or executes a blocked action. Without `--execute`, follow the returned command only when `allowed` is true. Use `pallium route capabilities --json` when you need the full selection and success-evidence contract.\n" +
 	"\n" +
 	"The router considers repo intelligence, session awareness, workflows, loops, agent teams, verification, and plain agent work. Skip Pallium for one-shot work when the route says its overhead is not justified.\n" +
 	"\n" +

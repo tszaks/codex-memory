@@ -24,9 +24,35 @@ func applySessionState(session *SessionSummary, signals sessionSignals, generate
 	if signals.LatestAt.After(session.LastActiveAt) {
 		session.LastActiveAt = signals.LatestAt
 	}
+	session.CompletionStatus = "unknown"
+	session.CompletedAt = nil
+	switch signals.Lifecycle {
+	case lifecycleFinished:
+		session.CompletionStatus = "finished"
+		if !signals.LifecycleAt.IsZero() {
+			completedAt := signals.LifecycleAt
+			session.CompletedAt = &completedAt
+		}
+	case lifecycleRunning:
+		session.CompletionStatus = "not_finished"
+	}
+	if signals.PendingTool != "" {
+		session.CompletionStatus = "not_finished"
+	}
 
 	if session.PID <= 0 {
-		setSessionState(session, inactiveSessionStatus, "no live process or open desktop task was found", "process", "high", session.LastActiveAt)
+		reason := "no live process or open desktop task was found"
+		source := "process"
+		confidence := "high"
+		if session.CompletionStatus == "finished" {
+			reason = "the transcript records task completion, and no live process or open desktop task was found"
+			source = firstNonEmpty(signals.Source, source)
+		} else if session.CompletionStatus == "not_finished" {
+			reason = "the latest transcript task has no completion event, and no live process or open desktop task was found"
+			source = firstNonEmpty(signals.Source, source)
+			confidence = "medium"
+		}
+		setSessionState(session, inactiveSessionStatus, reason, source, confidence, session.LastActiveAt)
 		return
 	}
 

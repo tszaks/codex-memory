@@ -99,6 +99,9 @@ func TestApplySessionStateUsesStrongEvidenceAndSafePrecedence(t *testing.T) {
 			if test.session.StatusReason == "" || test.session.StatusSource == "" || test.session.StatusConfidence == "" {
 				t.Fatalf("classification must be explainable: %+v", test.session)
 			}
+			if test.signals.Lifecycle == lifecycleFinished && test.session.CompletionStatus != CompletionFinished {
+				t.Fatalf("finished lifecycle must be independently queryable: %+v", test.session)
+			}
 		})
 	}
 }

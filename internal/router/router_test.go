@@ -21,6 +21,12 @@ func TestRouteChoosesLiveSessionsAndExplainsAlternatives(t *testing.T) {
 	if report.Service != "session-awareness" || report.Action != "inspect-live-sessions" || !report.Allowed {
 		t.Fatalf("unexpected route: %+v", report)
 	}
+	if report.CapabilityID != "sessions-live" || report.Capability.ID != report.CapabilityID {
+		t.Fatalf("route must expose its capability contract: %+v", report)
+	}
+	if got := strings.Join(report.CommandArgs, "\x00"); got != strings.Join([]string{"sessions", "live", "--running-only", "--details", "--json"}, "\x00") {
+		t.Fatalf("unexpected structured command args: %q", got)
+	}
 	if !strings.Contains(report.Command, "sessions live") || len(report.Alternatives) < 2 || len(report.Caveats) == 0 {
 		t.Fatalf("route must be actionable and honest about tradeoffs: %+v", report)
 	}
@@ -93,10 +99,68 @@ func TestRouteDistinguishesReviewFromReviewAndFix(t *testing.T) {
 	}
 }
 
+func TestRouteChoosesNaturalSessionFind(t *testing.T) {
+	report, err := Route(context.Background(), Options{Task: "Which sessions finished a few minutes ago?", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Action != "find-sessions-by-state-and-time" || !strings.Contains(report.Command, "sessions find") || !report.Allowed {
+		t.Fatalf("unexpected session find route: %+v", report)
+	}
+}
+
+func TestRouteRecognizesAddAsEditingWork(t *testing.T) {
+	report, err := Route(context.Background(), Options{Task: "add native session recency queries, then release", CWD: t.TempDir(), Authority: AuthorityEdit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Service != "workflow" || report.RequiredAuthority != AuthorityEdit || !report.Allowed {
+		t.Fatalf("unexpected editing route: %+v", report)
+	}
+}
+
 func TestRouteRejectsUnknownAuthority(t *testing.T) {
 	_, err := Route(context.Background(), Options{Task: "inspect this", CWD: t.TempDir(), Authority: "unlimited"})
 	if err == nil || !strings.Contains(err.Error(), "invalid authority") {
 		t.Fatalf("expected invalid authority error, got %v", err)
+	}
+}
+
+func TestCapabilitiesAreUniqueAndHaveValidAuthority(t *testing.T) {
+	seen := map[string]bool{}
+	for _, capability := range Capabilities() {
+		if capability.ID == "" || capability.Service == "" || capability.Description == "" {
+			t.Fatalf("incomplete capability: %+v", capability)
+		}
+		if seen[capability.ID] {
+			t.Fatalf("duplicate capability id %q", capability.ID)
+		}
+		seen[capability.ID] = true
+		if _, ok := authorityRank(capability.RequiredAuthority); !ok {
+			t.Fatalf("invalid authority for %q: %q", capability.ID, capability.RequiredAuthority)
+		}
+		if len(capability.UseWhen) == 0 || len(capability.AvoidWhen) == 0 || len(capability.SuccessEvidence) == 0 {
+			t.Fatalf("capability %q needs selection and success criteria: %+v", capability.ID, capability)
+		}
+	}
+	for _, id := range []string{"sessions-live", "sessions-find", "sessions-recall", "repo-review", "repo-preflight", "verify-safe", "workflow-start", "loop-design", "team-start"} {
+		if !seen[id] {
+			t.Fatalf("missing routed capability %q", id)
+		}
+	}
+}
+
+func TestRouteCommandDisplayQuotesWithoutChangingArgs(t *testing.T) {
+	task := "find session called Tyler's latest"
+	report, err := Route(context.Background(), Options{Task: task, CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.CommandArgs) < 3 || report.CommandArgs[2] != task {
+		t.Fatalf("task was not preserved as one argument: %+v", report.CommandArgs)
+	}
+	if !strings.Contains(report.Command, "Tyler'\\''s") {
+		t.Fatalf("display command was not safely quoted: %s", report.Command)
 	}
 }
 

@@ -6,6 +6,11 @@ Pallium has broad execution capacity, but a user or steering agent must already
 know which service to invoke. That manual translation makes the human the
 router and leaves useful services idle.
 
+The north star is not more orchestration for its own sake. It is helping people
+use more of the capability already present in their agents without requiring
+them to become expert agent managers. Repository context and memory serve that
+goal; they are not the goal by themselves.
+
 The product boundary is explicit: agents choose tools and execution shape;
 humans retain control of intent, constraints, and authority.
 
@@ -36,12 +41,13 @@ execution primitives.
 ### Exploit
 
 - Route from natural-language task plus current repository state.
-- Return one recommended service and command, the evidence used, why it fits,
+- Return one named capability and structured command, the evidence used, why it fits,
   and why alternatives fit less well.
 - Default authority to `observe` and return `allowed: false` when the selected
   action exceeds the supplied ceiling.
-- Keep routing advisory and side-effect-free. The steering agent executes the
-  returned command only when it remains inside user intent.
+- Let `--execute` invoke an allowed recommendation without shell parsing and
+  return its structured result. Refuse blocked routes rather than raising the
+  caller's authority ceiling.
 
 ### Subordinate
 
@@ -54,10 +60,9 @@ execution primitives.
 
 ### Elevate
 
-After the deterministic router has outcome data:
+The deterministic router now exposes a capability registry with selection,
+avoidance, authority, and success-evidence metadata. After it has outcome data:
 
-- Move service metadata into a capability registry so new tools become
-  routable without duplicating decision logic.
 - Add an MCP routing endpoint backed by the same contract.
 - Record route, override, completion, verification, and authority-block
   outcomes; use them to improve policy without learning broader permission.
@@ -76,3 +81,11 @@ Measure these before replacing the deterministic policy:
 
 The next constraint is likely route quality or adoption coverage. It should be
 identified from these outcomes, not assumed in advance.
+
+## Product guardrail
+
+A larger command menu does not make agents more capable. A routing feature only
+counts when a user can state intent without naming a Pallium tool, the agent
+selects and performs a justified action inside existing authority, and the
+result contains enough evidence to judge success. Natural session queries,
+capability discovery, and bounded execution are infrastructure for that test.
