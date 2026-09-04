@@ -14,7 +14,7 @@ One kernel, six services. Any model powers the work. Any agent drives it.
 
 ```bash
 npm i -g pallium
-pallium start "review my workflow changes and fix what's broken"
+pallium route "review my workflow changes and fix what's broken" --authority edit --json
 ```
 
 ## The problem it solves
@@ -41,11 +41,23 @@ Pallium moves the durable parts out of the model:
 Pallium is one binary and one local database. The services share that kernel and
 compose through public interfaces.
 
-### `pallium start "<task>"`, the golden path
+### `pallium route "<task>"`, agent-driven service choice
+
+Give Pallium the task and the authority ceiling the user or environment already
+granted. It inspects repository state, recommends the best service, explains why
+it fits better than alternatives, and returns an executable command. It never
+widens authority or runs the recommendation itself.
+
+```bash
+pallium route "find all running agent sessions" --authority observe --json
+pallium route "fix the checkout race and verify it" --authority edit --json
+```
+
+### `pallium start "<task>"`, the workflow golden path
 
 Describe a task in plain language. Pallium scopes the repo, picks or generates a
-plan, runs it, and reports back. Start here when you are not sure which service
-you need.
+plan, runs it, and reports back. Use it directly when you already know a
+repo-scoped workflow is the right service, or follow a route that selects it.
 
 ### Workflows: deterministic multi-agent orchestration
 
@@ -144,9 +156,12 @@ Semantic retrieval stores one bounded continuity vector per session, built from
 the capsule, repository metadata, touched files, commands, and first/last
 conversation evidence. Exact search still covers the full indexed transcript.
 
-`sessions live` discovers terminal agents and Codex desktop tasks. A task is
-`active` only when recent transcript activity supports that label. A live task
-with no recent activity is `idle`; inactivity alone is not reported as a hang.
+`sessions live` discovers local Codex CLI/Desktop and Claude Code sessions. JSON
+output includes its best-effort coverage and explicit exclusions, so callers do
+not mistake it for a generic inventory of shells, SSH/tmux, browsers, or unknown
+agent providers. Transcript lifecycle and pending calls distinguish `active`,
+`waiting`, `blocked`, `finished`, and `idle`. `stuck` requires both prolonged
+silence and stopped or uninterruptible process evidence; silence alone is idle.
 
 Maintenance is explicit and safe by default:
 

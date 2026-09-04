@@ -116,23 +116,27 @@ func runSessionsLive(out io.Writer, args []string, jsonOutput bool, watch bool) 
 }
 
 func renderLiveSessions(out io.Writer, snapshot *codexsessions.SessionSnapshot, includeAll, details bool) {
-	active, idle, inactive := 0, 0, 0
+	counts := map[string]int{}
 	for _, s := range snapshot.Sessions {
-		switch s.Status {
-		case "active":
-			active++
-		case "idle":
-			idle++
-		default:
-			inactive++
+		counts[s.Status]++
+	}
+	parts := []string{}
+	for _, status := range []string{"blocked", "stuck", "waiting", "active", "idle", "finished", "inactive"} {
+		if counts[status] > 0 || (includeAll && status == "inactive") {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[status], status))
 		}
 	}
-	if includeAll {
-		fmt.Fprintf(out, "%d active, %d idle, %d inactive agent sessions\n", active, idle, inactive)
-	} else {
-		fmt.Fprintf(out, "%d active, %d idle agent sessions\n", active, idle)
+	if len(parts) == 0 {
+		parts = append(parts, "0 live")
 	}
+	fmt.Fprintf(out, "%s agent sessions\n", strings.Join(parts, ", "))
+	fmt.Fprintf(out, "scope: %s (%s)\n", firstNonEmpty(snapshot.Coverage.Scope, "local-agent-sessions"), firstNonEmpty(snapshot.Coverage.Completeness, "best-effort"))
 	fmt.Fprintf(out, "updated %s\n\n", snapshot.GeneratedAt.Local().Format(time.Kitchen))
+	for _, provider := range snapshot.Coverage.Providers {
+		if provider.Status != "available" {
+			fmt.Fprintf(out, "coverage: %s is %s (%s)\n", provider.Provider, provider.Status, provider.Evidence)
+		}
+	}
 	for _, warning := range snapshot.Warnings {
 		fmt.Fprintf(out, "warning: %s\n", warning)
 	}
@@ -149,6 +153,9 @@ func renderLiveSessions(out io.Writer, snapshot *codexsessions.SessionSnapshot, 
 			pid = strconv.Itoa(s.PID)
 		}
 		fmt.Fprintf(out, "%s %s %s %s %s %s %s\n", firstNonEmpty(s.Provider, "agent"), pid, firstNonEmpty(s.TTY, "-"), s.Status, shortID(s.ThreadID), compactPath(s.EffectiveWorkdir), trimText(s.Title, 90))
+		if details && s.StatusReason != "" {
+			fmt.Fprintf(out, "  state: %s (source=%s confidence=%s)\n", s.StatusReason, firstNonEmpty(s.StatusSource, "unknown"), firstNonEmpty(s.StatusConfidence, "unknown"))
+		}
 		if details && s.RecentAction != "" {
 			fmt.Fprintf(out, "  recent: %s\n", s.RecentAction)
 		}
@@ -1107,6 +1114,9 @@ func parseSessionRetentionAge(value string) (time.Duration, error) {
 
 func printSessionsHelp(out io.Writer) {
 	fmt.Fprintln(out, `pallium sessions
+
+Live discovery covers local Codex CLI/Desktop and Claude Code sessions. It is
+best-effort and reports provider coverage plus explicit exclusions in JSON.
 
 Usage:
   pallium sessions live [--all] [--details] [--json]

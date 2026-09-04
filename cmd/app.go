@@ -40,6 +40,8 @@ func (a *App) Run(args []string) error {
 		return runVersion(a.stdout, jsonOutput)
 	case "start":
 		return runStart(a.stdout, filtered[1:], jsonOutput)
+	case "route":
+		return runRoute(a.stdout, filtered[1:], jsonOutput)
 	case "team":
 		return runTeam(a.stdout, filtered[1:], jsonOutput)
 	case "loop":
@@ -88,6 +90,7 @@ func (a *App) printHelp() {
 	fmt.Fprintln(a.stdout, `pallium
 
 Usage:
+  pallium route <task> [--cwd path] [--authority observe|execute|edit|external] [--json]
   pallium start <task> [--workflow name] [--style auto|review|test-fix|research] [--cwd repo-path] [--dry-run] [--json]
   pallium team <start|spawn|tasks|send|inbox|nudge|status|run|approve|stop|attach> [--json]
   pallium loop <start|tick|status|list|stop|reset> [--json]
