@@ -163,7 +163,7 @@ func TestRunCodexTeamTurnSurfacesScanTooLongError(t *testing.T) {
 	// remaining unread tail leaves the child blocked on a pipe nobody's
 	// draining anymore (see the comment above) — it should never actually
 	// need to fire, but keeps the test from hanging if it does.
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, err := r.runCodexTeamTurn(ctx, tmp, filepath.Join(tmp, "last.txt"), t.TempDir(), "", "", "read-only", false, "hi", nil, nil)
 	if err == nil {

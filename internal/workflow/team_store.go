@@ -52,15 +52,17 @@ type Team struct {
 // so an interrupted turn (the owning process died mid-turn) is detectable
 // and resumable rather than looking like a live member that never responds.
 type TeamMember struct {
-	ID           string `json:"id"`
-	TeamID       string `json:"team_id"`
-	Name         string `json:"name"`
-	Provider     string `json:"provider"`
-	Model        string `json:"model,omitempty"`
-	Role         string `json:"role,omitempty"`
-	Mode         string `json:"mode"`   // read-only | edit
-	Status       string `json:"status"` // idle | active | blocked | interrupted | stale | stopped | error
-	SessionToken string `json:"session_token,omitempty"`
+	RoutingJSON     string `json:"routing_json,omitempty"`
+	ID              string `json:"id"`
+	TeamID          string `json:"team_id"`
+	Name            string `json:"name"`
+	Provider        string `json:"provider"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	Role            string `json:"role,omitempty"`
+	Mode            string `json:"mode"`   // read-only | edit
+	Status          string `json:"status"` // idle | active | blocked | interrupted | stale | stopped | error
+	SessionToken    string `json:"session_token,omitempty"`
 	// SessionEstablished is sticky-true once a turn has ever completed with
 	// a status other than "error" (see FinishMemberTurn). It is deliberately
 	// NOT the same as TurnCount>0: TurnCount increments even on a failed
@@ -162,6 +164,8 @@ CREATE TABLE IF NOT EXISTS team_members (
   name TEXT NOT NULL,
   provider TEXT NOT NULL,
   model TEXT,
+  reasoning_effort TEXT,
+  routing_json TEXT,
   role TEXT,
   mode TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -220,6 +224,8 @@ func (s *Store) initTeams() error {
 	}
 	for _, stmt := range []string{
 		// M2: plan-approval flow (see TeamMember.PlanRequired/PlanStatus).
+		"ALTER TABLE team_members ADD COLUMN reasoning_effort TEXT",
+		"ALTER TABLE team_members ADD COLUMN routing_json TEXT",
 		"ALTER TABLE team_members ADD COLUMN plan_required INTEGER DEFAULT 0",
 		"ALTER TABLE team_members ADD COLUMN plan_status TEXT",
 		// M2: quality-gate hook configuration (see Team.GatePrompt/GateHooks).
@@ -415,7 +421,30 @@ func (s *Store) AddTeamSpend(id string, delta float64) (overBudget bool, err err
 // (its first BeginMemberTurn is turn 1). The (team_id, name) UNIQUE
 // constraint makes spawning an already-used name a clear conflict rather
 // than silently creating a second identity with the same address.
-func (s *Store) SpawnMember(teamID, name, provider, model, role, mode string) (TeamMember, error) {
+func (s *Store) SpawnMember(teamID, name, provider, model, role, mode string, efforts ...string) (TeamMember, error) {
+	effort := ""
+	if len(efforts) > 0 {
+		effort = efforts[0]
+	}
+	routingJSON := ""
+	if provider != "external" {
+		team, err := s.GetTeam(teamID)
+		if err != nil {
+			return TeamMember{}, err
+		}
+		r := Runner{Run: Run{CWD: team.CWD}}
+		opts, decision, err := r.resolveRouting(AgentOptions{Provider: provider, Model: model, ReasoningEffort: effort}, mode)
+		if err != nil {
+			return TeamMember{}, err
+		}
+		provider = ResolveProvider("", opts.Provider)
+		model = opts.Model
+		effort = opts.ReasoningEffort
+		routingJSON = decision
+	}
+	if err := ValidateReasoningEffort(provider, model, effort); err != nil {
+		return TeamMember{}, err
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return TeamMember{}, fmt.Errorf("team member requires a name")
@@ -424,9 +453,9 @@ func (s *Store) SpawnMember(teamID, name, provider, model, role, mode string) (T
 		return TeamMember{}, fmt.Errorf("team member mode must be \"read-only\" or \"edit\", got %q", mode)
 	}
 	now := nowString()
-	m := TeamMember{ID: NewID("tm"), TeamID: teamID, Name: name, Provider: provider, Model: model, Role: role, Mode: mode, Status: "idle", CreatedAt: now, UpdatedAt: now}
-	_, err := s.db.Exec(`INSERT INTO team_members(id,team_id,name,provider,model,role,mode,status,turn_count,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,0,?,?)`,
-		m.ID, m.TeamID, m.Name, m.Provider, m.Model, m.Role, m.Mode, m.Status, m.CreatedAt, m.UpdatedAt)
+	m := TeamMember{ID: NewID("tm"), TeamID: teamID, Name: name, Provider: provider, Model: model, ReasoningEffort: effort, RoutingJSON: routingJSON, Role: role, Mode: mode, Status: "idle", CreatedAt: now, UpdatedAt: now}
+	_, err := s.db.Exec(`INSERT INTO team_members(id,team_id,name,provider,model,reasoning_effort,routing_json,role,mode,status,turn_count,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?)`,
+		m.ID, m.TeamID, m.Name, m.Provider, m.Model, m.ReasoningEffort, m.RoutingJSON, m.Role, m.Mode, m.Status, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return TeamMember{}, fmt.Errorf("team member %q already exists on team %s", name, teamID)
@@ -441,8 +470,8 @@ func (s *Store) SpawnMember(teamID, name, provider, model, role, mode string) (T
 // approved to make yet) and starts with PlanStatus "pending" — see
 // ApproveMemberPlan/RejectMemberPlan and buildTeamTurnPrompt's plan-mode
 // framing.
-func (s *Store) SpawnPlanRequiredMember(teamID, name, provider, model, role string) (TeamMember, error) {
-	if _, err := s.SpawnMember(teamID, name, provider, model, role, "read-only"); err != nil {
+func (s *Store) SpawnPlanRequiredMember(teamID, name, provider, model, role string, efforts ...string) (TeamMember, error) {
+	if _, err := s.SpawnMember(teamID, name, provider, model, role, "read-only", efforts...); err != nil {
 		return TeamMember{}, err
 	}
 	if _, err := s.db.Exec(`UPDATE team_members SET plan_required=1, plan_status='pending', updated_at=? WHERE team_id=? AND name=?`, nowString(), teamID, name); err != nil {
@@ -665,7 +694,7 @@ func scanMember(row *sql.Row) (TeamMember, error) {
 	var m TeamMember
 	var model, role, session, worktree, turnStarted, lastAt, lastStatus, lastSummary, lastErr, nudged, planStatus, lastActive sql.NullString
 	var planRequired, stopRequested int
-	err := row.Scan(&m.ID, &m.TeamID, &m.Name, &m.Provider, &model, &role, &m.Mode, &m.Status, &session, &m.SessionEstablished, &planRequired, &planStatus, &stopRequested, &worktree,
+	err := row.Scan(&m.ID, &m.TeamID, &m.Name, &m.Provider, &model, &m.ReasoningEffort, &m.RoutingJSON, &role, &m.Mode, &m.Status, &session, &m.SessionEstablished, &planRequired, &planStatus, &stopRequested, &worktree,
 		&m.TurnCount, &turnStarted, &lastAt, &lastStatus, &lastSummary, &lastErr, &nudged, &lastActive, &m.SpendUSD, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return TeamMember{}, err
@@ -679,7 +708,7 @@ func scanMember(row *sql.Row) (TeamMember, error) {
 	return m, nil
 }
 
-const memberSelectCols = `id,team_id,name,provider,model,role,mode,status,session_token,session_established,COALESCE(plan_required,0),COALESCE(plan_status,''),COALESCE(stop_requested,0),worktree,turn_count,turn_started_at,last_turn_at,last_turn_status,COALESCE(last_turn_summary,''),last_turn_error,nudged_at,COALESCE(last_active_at,''),spend_usd,created_at,updated_at`
+const memberSelectCols = `id,team_id,name,provider,model,COALESCE(reasoning_effort,''),COALESCE(routing_json,''),role,mode,status,session_token,session_established,COALESCE(plan_required,0),COALESCE(plan_status,''),COALESCE(stop_requested,0),worktree,turn_count,turn_started_at,last_turn_at,last_turn_status,COALESCE(last_turn_summary,''),last_turn_error,nudged_at,COALESCE(last_active_at,''),spend_usd,created_at,updated_at`
 
 func (s *Store) GetMember(teamID, name string) (TeamMember, error) {
 	m, err := scanMember(s.db.QueryRow(`SELECT `+memberSelectCols+` FROM team_members WHERE team_id=? AND name=?`, teamID, name))
@@ -700,7 +729,7 @@ func (s *Store) ListMembers(teamID string) ([]TeamMember, error) {
 		var m TeamMember
 		var model, role, session, worktree, turnStarted, lastAt, lastStatus, lastSummary, lastErr, nudged, planStatus, lastActive sql.NullString
 		var planRequired, stopRequested int
-		if err := rows.Scan(&m.ID, &m.TeamID, &m.Name, &m.Provider, &model, &role, &m.Mode, &m.Status, &session, &m.SessionEstablished, &planRequired, &planStatus, &stopRequested, &worktree,
+		if err := rows.Scan(&m.ID, &m.TeamID, &m.Name, &m.Provider, &model, &m.ReasoningEffort, &m.RoutingJSON, &role, &m.Mode, &m.Status, &session, &m.SessionEstablished, &planRequired, &planStatus, &stopRequested, &worktree,
 			&m.TurnCount, &turnStarted, &lastAt, &lastStatus, &lastSummary, &lastErr, &nudged, &lastActive, &m.SpendUSD, &m.CreatedAt, &m.UpdatedAt); err != nil {
 			return nil, err
 		}

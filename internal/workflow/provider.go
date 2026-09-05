@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ResolveProvider picks the worker provider for an agent call. Precedence,
@@ -79,7 +80,16 @@ func DetectSteeringProvider() string {
 // Both a live agent call (runAgentCommand) and a one-off text call
 // (RunProviderText, used by workflow generation) route through this same
 // function, so no caller special-cases codex or any other provider.
-func (r *Runner) runProviderCommand(ctx context.Context, provider, tmpDir, outFile, usageFile, cwd, prompt string, agent *Agent, opts AgentOptions, networkAllowed bool) (string, error) {
+func (r *Runner) runProviderCommand(ctx context.Context, provider, tmpDir, outFile, usageFile, cwd, prompt string, agent *Agent, opts AgentOptions, networkAllowed bool) (output string, callErr error) {
+	started := time.Now()
+	defer func() {
+		if err := r.Store.recordInvocation(r.Run.ID, agent.ID, provider, opts.Model, opts.ReasoningEffort, started, usageFromFile(usageFile), callErr); err != nil {
+			callErr = fmt.Errorf("record provider invocation: %w", err)
+		}
+	}()
+	if err := ValidateReasoningEffort(provider, opts.Model, opts.ReasoningEffort); err != nil {
+		return "", err
+	}
 	if provider == "codex" {
 		return r.runCodexCommand(ctx, tmpDir, outFile, cwd, prompt, agent, opts, networkAllowed)
 	}
@@ -123,7 +133,11 @@ func (r *Runner) RunProviderText(ctx context.Context, prompt string) (string, er
 	defer os.RemoveAll(tmpDir)
 	outFile := filepath.Join(tmpDir, "last-message.txt")
 	usageFile := filepath.Join(tmpDir, "usage.json")
-	provider := ResolveProvider("", "")
-	agent := &Agent{Mode: "read-only", Prompt: prompt, Provider: provider}
-	return r.runProviderCommand(ctx, provider, tmpDir, outFile, usageFile, cwd, prompt, agent, AgentOptions{}, false)
+	opts, decision, err := r.resolveRouting(AgentOptions{TaskClass: "planning"}, "read-only")
+	if err != nil {
+		return "", err
+	}
+	provider := ResolveProvider("", opts.Provider)
+	agent := &Agent{Mode: "read-only", Prompt: prompt, Provider: provider, Model: opts.Model, ReasoningEffort: opts.ReasoningEffort, RoutingJSON: decision}
+	return r.runProviderCommand(ctx, provider, tmpDir, outFile, usageFile, cwd, prompt, agent, opts, false)
 }

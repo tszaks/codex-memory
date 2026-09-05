@@ -296,10 +296,11 @@ func runTeamSpawn(out io.Writer, args []string, jsonOutput bool) error {
 	dbPath := fs.String("db", "", "")
 	provider := fs.String("provider", "", "")
 	model := fs.String("model", "", "")
+	effort := fs.String("reasoning-effort", "", "Worker reasoning effort")
 	role := fs.String("role", "", "")
 	mode := fs.String("mode", "read-only", "")
 	planRequired := fs.Bool("plan-required", false, "")
-	if err := parseSessionFlags(fs, args, map[string]struct{}{"db": {}, "provider": {}, "model": {}, "role": {}, "mode": {}}, map[string]struct{}{"plan-required": {}}); err != nil {
+	if err := parseSessionFlags(fs, args, map[string]struct{}{"db": {}, "provider": {}, "model": {}, "reasoning-effort": {}, "role": {}, "mode": {}}, map[string]struct{}{"plan-required": {}}); err != nil {
 		return err
 	}
 	positionals := fs.Args()
@@ -312,7 +313,7 @@ func runTeamSpawn(out io.Writer, args []string, jsonOutput bool) error {
 		return err
 	}
 	defer store.Close()
-	member, err := spawnTeamMember(store, teamID, name, *provider, *model, *role, *mode, *planRequired)
+	member, err := spawnTeamMember(store, teamID, name, *provider, *model, *role, *mode, *planRequired, *effort)
 	if err != nil {
 		return err
 	}
@@ -328,7 +329,7 @@ func runTeamSpawn(out io.Writer, args []string, jsonOutput bool) error {
 // final member row. Kept as one function so a template-spawned member is
 // indistinguishable from one spawned by hand — no second, drifting copy of
 // the claude-session-minting step.
-func spawnTeamMember(store *workflow.Store, teamID, name, provider, model, role, mode string, planRequired bool) (workflow.TeamMember, error) {
+func spawnTeamMember(store *workflow.Store, teamID, name, provider, model, role, mode string, planRequired bool, effort ...string) (workflow.TeamMember, error) {
 	resolvedProvider := workflow.ResolveProvider("", provider)
 	var member workflow.TeamMember
 	var err error
@@ -336,9 +337,9 @@ func spawnTeamMember(store *workflow.Store, teamID, name, provider, model, role,
 		// A plan-required member is always spawned read-only regardless of
 		// mode: it cannot edit anything until `team approve` flips it, so
 		// mode is enforced here, not merely defaulted.
-		member, err = store.SpawnPlanRequiredMember(teamID, name, resolvedProvider, model, role)
+		member, err = store.SpawnPlanRequiredMember(teamID, name, resolvedProvider, model, role, effort...)
 	} else {
-		member, err = store.SpawnMember(teamID, name, resolvedProvider, model, role, mode)
+		member, err = store.SpawnMember(teamID, name, resolvedProvider, model, role, mode, effort...)
 	}
 	if err != nil {
 		return workflow.TeamMember{}, err
@@ -411,7 +412,7 @@ func runTeamTasksAdd(out io.Writer, args []string, jsonOutput bool) error {
 	// configured wrapper provider the same PALLIUM_WORKFLOW_RUN_ID metadata
 	// during a gate call that it already gets during a real team turn.
 	// Found by review: this bare Runner used to leave Run.ID empty.
-	runner := &workflow.Runner{Run: workflow.Run{ID: teamID}}
+	runner := &workflow.Runner{Store: store, Run: workflow.Run{ID: teamID}}
 	task, err := runner.CreateTeamTaskWithGate(context.Background(), store, teamID, title, *description, deps)
 	if err != nil {
 		return err
@@ -507,7 +508,7 @@ func runTeamTasksComplete(out io.Writer, args []string, jsonOutput bool) error {
 	// tasks add` above — a configured wrapper provider gets the same
 	// PALLIUM_WORKFLOW_RUN_ID metadata during this gate call that it would
 	// during a real team turn. Found by review.
-	runner := &workflow.Runner{Run: workflow.Run{ID: positionals[0]}}
+	runner := &workflow.Runner{Store: store, Run: workflow.Run{ID: positionals[0]}}
 	task, approved, err := runner.CompleteTaskWithGate(context.Background(), store, positionals[0], positionals[1], *as, *result)
 	if err != nil {
 		return err
@@ -798,7 +799,7 @@ func runTeamRun(out io.Writer, args []string, jsonOutput bool) error {
 		return err
 	}
 	defer store.Close()
-	runner := &workflow.Runner{CodexBinary: *codexBinary}
+	runner := &workflow.Runner{Store: store, CodexBinary: *codexBinary}
 	opts := workflow.TeamTurnOptions{
 		StaleTurnAfter: time.Duration(*staleAfterMinutes) * time.Minute,
 		AgentTimeout:   time.Duration(*agentTimeout) * time.Second,

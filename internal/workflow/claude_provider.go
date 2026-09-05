@@ -98,10 +98,13 @@ func buildClaudePrompt(prompt string, schema map[string]any) (string, error) {
 // the built-in provider (the zero-config default under CLAUDECODE) would
 // inherit whatever tools ambient settings/hooks/MCP grant. Verified: the -p
 // JSON flow returns normally under --safe-mode.
-func buildClaudeArgs(mode, model string) []string {
+func buildClaudeArgs(mode, model string, effort ...string) []string {
 	args := []string{"-p", "--output-format", "json", "--safe-mode", "--strict-mcp-config"}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if len(effort) > 0 && effort[0] != "" {
+		args = append(args, "--effort", effort[0])
 	}
 	switch mode {
 	case "edit", "test", "check":
@@ -129,7 +132,7 @@ func (r *Runner) runBuiltinClaudeCommand(ctx context.Context, usageFile, cwd, pr
 	if err != nil {
 		return "", fmt.Errorf("workflow provider \"claude\": %w", err)
 	}
-	args := buildClaudeArgs(agent.Mode, opts.Model)
+	args := buildClaudeArgs(agent.Mode, opts.Model, opts.ReasoningEffort)
 	cmd := exec.CommandContext(ctx, claudeCLIName, args...)
 	cmd.Dir = cwd
 	cmd.WaitDelay = 5 * time.Second
@@ -142,20 +145,19 @@ func (r *Runner) runBuiltinClaudeCommand(ctx context.Context, usageFile, cwd, pr
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		// Cap the embedded CLI output so a huge or malformed response can't
-		// bloat the stored error record.
-		baseErr := formatProviderFailure("workflow provider \"claude\"", err, truncateForError(strings.TrimSpace(stderr.String())))
-		return truncateForError(strings.TrimSpace(stdout.String())), wrapProviderCommandError(baseErr, stdout.String()+stderr.String())
-	}
-	text, usage, err := extractClaudeOutput(stdout.String(), len(opts.Schema) > 0)
-	if err != nil {
-		return "", fmt.Errorf("workflow provider \"claude\" produced no output: %w", err)
-	}
+	runErr := cmd.Run()
+	text, usage, parseErr := extractClaudeOutput(stdout.String(), len(opts.Schema) > 0)
 	if usage != nil {
-		if raw, marshalErr := json.Marshal(usage); marshalErr == nil {
+		if raw, err := json.Marshal(usage); err == nil {
 			_ = os.WriteFile(usageFile, raw, 0o600)
 		}
+	}
+	if runErr != nil {
+		baseErr := formatProviderFailure("workflow provider \"claude\"", runErr, truncateForError(strings.TrimSpace(stderr.String())))
+		return truncateForError(strings.TrimSpace(stdout.String())), wrapProviderCommandError(baseErr, stdout.String()+stderr.String())
+	}
+	if parseErr != nil {
+		return "", fmt.Errorf("workflow provider \"claude\" produced no output: %w", parseErr)
 	}
 	return text, nil
 }
@@ -175,8 +177,8 @@ func (r *Runner) runBuiltinClaudeCommand(ctx context.Context, usageFile, cwd, pr
 // teammate's coordination ability never depends on a provider's Bash
 // allowlist model (codex has no per-command allowlist, only a coarse
 // read-only/workspace-write sandbox toggle).
-func buildClaudeTeamArgs(mode, model, sessionToken string, isFirstTurn bool) []string {
-	args := buildClaudeArgs(mode, model)
+func buildClaudeTeamArgs(mode, model, sessionToken string, isFirstTurn bool, effort ...string) []string {
+	args := buildClaudeArgs(mode, model, effort...)
 	if isFirstTurn {
 		args = append(args, "--session-id", sessionToken)
 	} else {
@@ -195,12 +197,12 @@ func buildClaudeTeamArgs(mode, model, sessionToken string, isFirstTurn bool) []s
 // edit mode, or the team's repo root for read-only — resolved by the caller
 // exactly like a regular worker's cwd, so edit-mode teammates get the same
 // isolation.
-func (r *Runner) runClaudeTeamTurn(ctx context.Context, mode, model, sessionToken string, isFirstTurn bool, cwd, prompt string, schema map[string]any) (string, map[string]any, error) {
+func (r *Runner) runClaudeTeamTurn(ctx context.Context, mode, model, sessionToken string, isFirstTurn bool, cwd, prompt string, schema map[string]any, effort ...string) (string, map[string]any, error) {
 	fullPrompt, err := buildClaudePrompt(prompt, schema)
 	if err != nil {
 		return "", nil, fmt.Errorf("team turn (claude): %w", err)
 	}
-	args := buildClaudeTeamArgs(mode, model, sessionToken, isFirstTurn)
+	args := buildClaudeTeamArgs(mode, model, sessionToken, isFirstTurn, effort...)
 	cmd := exec.CommandContext(ctx, claudeCLIName, args...)
 	cmd.Dir = cwd
 	cmd.WaitDelay = 5 * time.Second
@@ -208,13 +210,14 @@ func (r *Runner) runClaudeTeamTurn(ctx context.Context, mode, model, sessionToke
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		baseErr := formatProviderFailure("team turn (claude)", err, truncateForError(strings.TrimSpace(stderr.String())))
-		return "", nil, wrapProviderCommandError(baseErr, stdout.String()+stderr.String())
+	runErr := cmd.Run()
+	text, usage, parseErr := extractClaudeOutput(stdout.String(), len(schema) > 0)
+	if runErr != nil {
+		baseErr := formatProviderFailure("team turn (claude)", runErr, truncateForError(strings.TrimSpace(stderr.String())))
+		return "", usage, wrapProviderCommandError(baseErr, stdout.String()+stderr.String())
 	}
-	text, usage, err := extractClaudeOutput(stdout.String(), len(schema) > 0)
-	if err != nil {
-		return "", nil, fmt.Errorf("team turn (claude) produced no output: %w", err)
+	if parseErr != nil {
+		return "", usage, fmt.Errorf("team turn (claude) produced no output: %w", parseErr)
 	}
 	return text, usage, nil
 }
