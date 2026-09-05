@@ -21,6 +21,7 @@ import (
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 	"github.com/tszaks/pallium/internal/gitlog"
+	"github.com/tszaks/pallium/internal/routing"
 )
 
 var (
@@ -92,14 +93,17 @@ type Runner struct {
 }
 
 type AgentOptions struct {
-	Label          string         `json:"label,omitempty"`
-	Provider       string         `json:"provider,omitempty"`
-	Repo           string         `json:"repo,omitempty"`
-	Mode           string         `json:"mode,omitempty"`
-	Isolation      string         `json:"isolation,omitempty"`
-	Schema         map[string]any `json:"schema,omitempty"`
-	Model          string         `json:"model,omitempty"`
-	TimeoutSeconds *int           `json:"timeout_seconds,omitempty"`
+	verificationRetry int
+	TaskClass         string         `json:"task_class,omitempty"`
+	Label             string         `json:"label,omitempty"`
+	Provider          string         `json:"provider,omitempty"`
+	Repo              string         `json:"repo,omitempty"`
+	Mode              string         `json:"mode,omitempty"`
+	Isolation         string         `json:"isolation,omitempty"`
+	Schema            map[string]any `json:"schema,omitempty"`
+	Model             string         `json:"model,omitempty"`
+	ReasoningEffort   string         `json:"reasoning_effort,omitempty"`
+	TimeoutSeconds    *int           `json:"timeout_seconds,omitempty"`
 	// Network is the agent's opt-in request for network egress. It is only
 	// honored when the run was launched with --allow-network (the operator
 	// ceiling); otherwise the agent runs sandboxed. Default false.
@@ -107,19 +111,23 @@ type AgentOptions struct {
 }
 
 type CheckOptions struct {
-	Label    string         `json:"label,omitempty"`
-	Provider string         `json:"provider,omitempty"`
-	Model    string         `json:"model,omitempty"`
-	Schema   map[string]any `json:"schema,omitempty"`
+	TaskClass       string         `json:"task_class,omitempty"`
+	Label           string         `json:"label,omitempty"`
+	Provider        string         `json:"provider,omitempty"`
+	Model           string         `json:"model,omitempty"`
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
+	Schema          map[string]any `json:"schema,omitempty"`
 }
 
 type GateOptions struct {
-	Label      string `json:"label,omitempty"`
-	Provider   string `json:"provider,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Mode       string `json:"mode,omitempty"`
-	Criteria   string `json:"criteria,omitempty"`
-	FailOnDeny *bool  `json:"fail_on_deny,omitempty"`
+	TaskClass       string `json:"task_class,omitempty"`
+	Label           string `json:"label,omitempty"`
+	Provider        string `json:"provider,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	Criteria        string `json:"criteria,omitempty"`
+	FailOnDeny      *bool  `json:"fail_on_deny,omitempty"`
 }
 
 type PolicyFinding struct {
@@ -549,7 +557,17 @@ func (r *Runner) jsGate(ctx context.Context, vm *goja.Runtime) func(goja.Functio
 }
 
 func (r *Runner) runAgentGate(ctx context.Context, name, message string, opts GateOptions) (map[string]any, error) {
-	gate, err := r.Store.EnsureGate(r.Run.ID, name, message)
+	policyRaw, policyErr := os.ReadFile(routing.ConfigPath(r.Run.CWD))
+	if policyErr != nil && (!os.IsNotExist(policyErr) || os.Getenv("PALLIUM_ROUTING_CONFIG") != "") {
+		return nil, policyErr
+	}
+	keyRaw, _ := json.Marshal(struct {
+		Options GateOptions
+		Message string
+		Policy  string
+	}{opts, message, string(policyRaw)})
+	keyHash := sha256.Sum256(keyRaw)
+	gate, err := r.Store.EnsureGate(r.Run.ID, name, message, hex.EncodeToString(keyHash[:]))
 	if err != nil {
 		return nil, err
 	}
@@ -569,11 +587,13 @@ func (r *Runner) runAgentGate(ctx context.Context, name, message string, opts Ga
 		mode = "read-only"
 	}
 	agentOpts := AgentOptions{
-		Label:    firstNonEmpty(opts.Label, "gate-"+name),
-		Provider: opts.Provider,
-		Mode:     mode,
-		Model:    opts.Model,
-		Schema:   defaultGateSchema(),
+		Label:           firstNonEmpty(opts.Label, "gate-"+name),
+		Provider:        opts.Provider,
+		Mode:            mode,
+		Model:           opts.Model,
+		ReasoningEffort: opts.ReasoningEffort,
+		TaskClass:       opts.TaskClass,
+		Schema:          defaultGateSchema(),
 	}
 	output, err := r.RunAgent(ctx, buildGatePrompt(name, message, opts.Criteria), agentOpts)
 	if err != nil {
@@ -719,11 +739,12 @@ func (r *Runner) jsTeam(ctx context.Context, vm *goja.Runtime) map[string]any {
 		},
 		"spawn": func(teamID, name string, rawOpts ...any) goja.Value {
 			opts := struct {
-				Provider     string `json:"provider"`
-				Model        string `json:"model"`
-				Role         string `json:"role"`
-				Mode         string `json:"mode"`
-				PlanRequired bool   `json:"planRequired"`
+				Provider        string `json:"provider"`
+				Model           string `json:"model"`
+				ReasoningEffort string `json:"reasoning_effort"`
+				Role            string `json:"role"`
+				Mode            string `json:"mode"`
+				PlanRequired    bool   `json:"planRequired"`
 			}{Mode: "read-only"}
 			if len(rawOpts) > 0 {
 				decodeOpts(rawOpts[0], &opts)
@@ -731,9 +752,9 @@ func (r *Runner) jsTeam(ctx context.Context, vm *goja.Runtime) map[string]any {
 			provider := ResolveProvider("", opts.Provider)
 			var err error
 			if opts.PlanRequired {
-				_, err = r.Store.SpawnPlanRequiredMember(teamID, name, provider, opts.Model, opts.Role)
+				_, err = r.Store.SpawnPlanRequiredMember(teamID, name, provider, opts.Model, opts.Role, opts.ReasoningEffort)
 			} else {
-				_, err = r.Store.SpawnMember(teamID, name, provider, opts.Model, opts.Role, opts.Mode)
+				_, err = r.Store.SpawnMember(teamID, name, provider, opts.Model, opts.Role, opts.Mode, opts.ReasoningEffort)
 			}
 			if err != nil {
 				panic(vm.ToValue(err.Error()))
@@ -1054,11 +1075,13 @@ func (r *Runner) jsCheck(ctx context.Context, vm *goja.Runtime) func(goja.Functi
 			}
 		}
 		agentOpts := AgentOptions{
-			Label:    firstNonEmpty(opts.Label, "check: "+command),
-			Provider: opts.Provider,
-			Mode:     "test",
-			Model:    opts.Model,
-			Schema:   opts.Schema,
+			Label:           firstNonEmpty(opts.Label, "check: "+command),
+			Provider:        opts.Provider,
+			Mode:            "test",
+			Model:           opts.Model,
+			ReasoningEffort: opts.ReasoningEffort,
+			TaskClass:       opts.TaskClass,
+			Schema:          opts.Schema,
 		}
 		if len(agentOpts.Schema) == 0 {
 			agentOpts.Schema = defaultCheckSchema()
@@ -1113,6 +1136,10 @@ func (r *Runner) runUntilGreen(ctx context.Context, command string, options map[
 	label := optionString(options, "label", "until-green")
 	provider := optionString(options, "provider", "")
 	testModel := optionString(options, "model", "")
+	testEffort := optionString(options, "reasoning_effort", "")
+	fixTaskClass := optionString(options, "fix_task_class", "fix")
+	checkTaskClass := optionString(options, "task_class", "verification")
+	fixEffort := optionString(options, "fix_reasoning_effort", testEffort)
 	fixModel := optionString(options, "fix_model", testModel)
 
 	// One persistent worktree hosts the fix rounds so every later check sees
@@ -1208,12 +1235,14 @@ func (r *Runner) runUntilGreen(ctx context.Context, command string, options map[
 			checkRepo = worktree
 		}
 		checkOutput, err := r.RunAgent(ctx, buildCheckPrompt(command), AgentOptions{
-			Label:    fmt.Sprintf("%s-check-%d", label, round+1),
-			Provider: provider,
-			Repo:     checkRepo,
-			Mode:     "test",
-			Model:    testModel,
-			Schema:   defaultCheckSchema(),
+			Label:           fmt.Sprintf("%s-check-%d", label, round+1),
+			Provider:        provider,
+			Repo:            checkRepo,
+			Mode:            "test",
+			Model:           testModel,
+			ReasoningEffort: testEffort,
+			TaskClass:       checkTaskClass,
+			Schema:          defaultCheckSchema(),
 		})
 		if err != nil {
 			return nil, err
@@ -1244,12 +1273,15 @@ func (r *Runner) runUntilGreen(ctx context.Context, command string, options map[
 		}
 		fixPrompt := "Fix the failing verification for this workflow.\nCommand: " + command + "\nFailure JSON: " + stringifyResult(checkResult) + "\nMake the smallest correct code change. Do not skip, weaken, or hide tests."
 		fixOutput, err := r.RunAgent(ctx, fixPrompt, AgentOptions{
-			Label:     fmt.Sprintf("%s-fix-%d", label, round+1),
-			Provider:  provider,
-			Repo:      worktree,
-			Mode:      "edit",
-			Isolation: "none",
-			Model:     fixModel,
+			Label:             fmt.Sprintf("%s-fix-%d", label, round+1),
+			Provider:          provider,
+			Repo:              worktree,
+			Mode:              "edit",
+			Isolation:         "none",
+			Model:             fixModel,
+			ReasoningEffort:   fixEffort,
+			TaskClass:         fixTaskClass,
+			verificationRetry: round,
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -1914,7 +1946,14 @@ func (r *Runner) runAgentAtCallIndex(ctx context.Context, prompt string, opts Ag
 	if mode == "edit" {
 		prompt = editWorkerPrompt(prompt)
 	}
+	opts, routingJSON, routeErr := r.resolveRouting(opts, mode)
+	if routeErr != nil {
+		return "", routeErr
+	}
 	provider := ResolveProvider("", opts.Provider)
+	if err := ValidateReasoningEffort(provider, opts.Model, opts.ReasoningEffort); err != nil {
+		return "", err
+	}
 	if provider == "internal" {
 		// "internal" is reserved for registerUntilGreenPatch's own
 		// bookkeeping rows, which Store.AgentUsage excludes from the
@@ -1932,6 +1971,9 @@ func (r *Runner) runAgentAtCallIndex(ctx context.Context, prompt string, opts Ag
 		return "", err
 	}
 	schemaHash := agentSchemaHash(opts.Schema)
+	if opts.ReasoningEffort != "" {
+		schemaHash += ":effort=" + opts.ReasoningEffort
+	}
 	// networkGranted is the effective egress decision (agent opt-in AND the
 	// run's --allow-network ceiling), matching resolveAgentNetwork. It is part
 	// of the cache identity so re-running the same run-id WITHOUT
@@ -1998,6 +2040,8 @@ func (r *Runner) runAgentAtCallIndex(ctx context.Context, prompt string, opts Ag
 		Mode:             mode,
 		Isolation:        opts.Isolation,
 		Model:            opts.Model,
+		ReasoningEffort:  opts.ReasoningEffort,
+		RoutingJSON:      routingJSON,
 		SchemaHash:       schemaHash,
 		ScriptHash:       scriptHash,
 		ArgsHash:         argsHash,
@@ -3039,6 +3083,7 @@ func (r *Runner) runAgentCommand(ctx context.Context, agent *Agent, opts AgentOp
 	}
 	output, err := runProvider(ctx, agent.Prompt)
 	usageRaw, usage := readAndRemoveAgentUsage(usageFile)
+	_, costComplete := usage["cost_usd"].(float64)
 	// If the first attempt's own reported cost already exhausts the
 	// budget, skip the (paid) corrective retry entirely rather than
 	// billing a second call before the caller ever gets a chance to
@@ -3062,7 +3107,10 @@ func (r *Runner) runAgentCommand(ctx context.Context, agent *Agent, opts AgentOp
 			// Usage is read after each invocation (the file is removed in
 			// between), so the retry's cost adds to attempt one instead of
 			// overwriting it.
-			if retryRaw, retryUsage := readAndRemoveAgentUsage(usageFile); retryUsage != nil {
+			retryRaw, retryUsage := readAndRemoveAgentUsage(usageFile)
+			_, retryCostKnown := retryUsage["cost_usd"].(float64)
+			costComplete = costComplete && retryCostKnown
+			if retryUsage != nil {
 				if usage == nil {
 					usageRaw, usage = retryRaw, retryUsage
 				} else {
@@ -3081,6 +3129,24 @@ func (r *Runner) runAgentCommand(ctx context.Context, agent *Agent, opts AgentOp
 				output = retryOutput
 			}
 		}
+	}
+	if usage == nil {
+		usage = map[string]any{"cost_status": "unknown", "usage_status": "unavailable"}
+	}
+	if !costComplete && usage["cost_usd"] != nil {
+		usage["known_partial_cost_usd"] = usage["cost_usd"]
+		if known, ok := usage["cost_usd"].(float64); ok && known > agent.EstimatedCostUSD {
+			agent.EstimatedCostUSD = known
+		}
+		delete(usage, "cost_usd")
+		usage["cost_status"] = "partial"
+		usageRaw = ""
+	}
+	if _, ok := usage["cost_usd"]; !ok {
+		if usage["cost_status"] != "partial" {
+			usage["cost_status"] = "unknown"
+		}
+		usageRaw = ""
 	}
 	if usage != nil {
 		if usageRaw == "" {
@@ -3154,6 +3220,7 @@ func (r *Runner) runConfiguredProviderCommand(ctx context.Context, command, tmpD
 		"PALLIUM_WORKFLOW_LABEL="+agent.Label,
 		"PALLIUM_WORKFLOW_MODE="+agent.Mode,
 		"PALLIUM_WORKFLOW_MODEL="+agent.Model,
+		"PALLIUM_WORKFLOW_REASONING_EFFORT="+opts.ReasoningEffort,
 		"PALLIUM_WORKFLOW_REPO="+agent.Repo,
 		"PALLIUM_WORKFLOW_CWD="+cwd,
 		// The prompt is passed ONLY via the file below, never inline in the

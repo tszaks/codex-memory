@@ -2073,6 +2073,7 @@ type workflowStatus struct {
 }
 
 type workflowInspectionReport struct {
+	Invocations  []workflow.Invocation `json:"invocations,omitempty"`
 	Status       workflowStatus        `json:"status"`
 	ScriptPath   string                `json:"script_path"`
 	Result       string                `json:"result,omitempty"`
@@ -2135,13 +2136,14 @@ func workflowStatusSummary(snapshot workflow.Snapshot) workflowStatus {
 
 func workflowInspection(snapshot workflow.Snapshot) workflowInspectionReport {
 	report := workflowInspectionReport{
-		Status:     workflowStatusSummary(snapshot),
-		ScriptPath: snapshot.Run.ScriptPath,
-		Result:     snapshot.Run.Result,
-		Failures:   snapshot.Run.Failures,
-		Phases:     snapshot.Phases,
-		Agents:     snapshot.Agents,
-		ByPhase:    map[string]phaseStats{},
+		Invocations: snapshot.Invocations,
+		Status:      workflowStatusSummary(snapshot),
+		ScriptPath:  snapshot.Run.ScriptPath,
+		Result:      snapshot.Run.Result,
+		Failures:    snapshot.Run.Failures,
+		Phases:      snapshot.Phases,
+		Agents:      snapshot.Agents,
+		ByPhase:     map[string]phaseStats{},
 	}
 	for _, agent := range snapshot.Agents {
 		if agent.PatchPath != "" {

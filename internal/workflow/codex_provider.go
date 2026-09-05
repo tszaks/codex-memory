@@ -20,10 +20,13 @@ import (
 // flag) lives here too, mirroring runBuiltinClaudeCommand's role as the sole
 // claude invocation site.
 func (r *Runner) runCodexCommand(ctx context.Context, tmpDir, outFile, cwd, prompt string, agent *Agent, opts AgentOptions, networkAllowed bool) (string, error) {
-	cmdArgs := []string{"exec", "--cd", cwd, "--output-last-message", outFile}
+	cmdArgs := []string{"exec", "--json", "--cd", cwd, "--output-last-message", outFile}
 	cmdArgs = append(cmdArgs, codexSandboxArgs(agent.Mode, networkAllowed)...)
 	if opts.Model != "" {
 		cmdArgs = append(cmdArgs, "--model", opts.Model)
+	}
+	if opts.ReasoningEffort != "" {
+		cmdArgs = append(cmdArgs, "-c", "model_reasoning_effort="+opts.ReasoningEffort)
 	}
 	if len(opts.Schema) > 0 {
 		schemaPath := filepath.Join(tmpDir, "schema.json")
@@ -44,7 +47,9 @@ func (r *Runner) runCodexCommand(ctx context.Context, tmpDir, outFile, cwd, prom
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	writeCodexUsage(filepath.Join(tmpDir, "usage.json"), stdout.String())
+	if err := runErr; err != nil {
 		baseErr := formatProviderFailure("codex agent", err, stderr.String())
 		return "", wrapProviderCommandError(baseErr, stdout.String()+stderr.String())
 	}
@@ -76,7 +81,7 @@ type codexThreadStartedEvent struct {
 // outFile via --output-last-message, exactly like the regular worker path;
 // --json is layered on top purely to observe thread.started, not to parse
 // the final answer.
-func (r *Runner) runCodexTeamTurn(ctx context.Context, tmpDir, outFile, cwd, model, sessionToken string, mode string, networkAllowed bool, prompt string, schema map[string]any, onSessionCaptured func(threadID string)) (string, error) {
+func (r *Runner) runCodexTeamTurn(ctx context.Context, tmpDir, outFile, cwd, model, sessionToken string, mode string, networkAllowed bool, prompt string, schema map[string]any, onSessionCaptured func(threadID string), effort ...string) (string, error) {
 	var cmdArgs []string
 	if sessionToken == "" {
 		cmdArgs = []string{"exec", "--cd", cwd, "--json", "--output-last-message", outFile}
@@ -86,6 +91,9 @@ func (r *Runner) runCodexTeamTurn(ctx context.Context, tmpDir, outFile, cwd, mod
 	cmdArgs = append(cmdArgs, codexSandboxArgs(mode, networkAllowed)...)
 	if model != "" {
 		cmdArgs = append(cmdArgs, "--model", model)
+	}
+	if len(effort) > 0 && effort[0] != "" {
+		cmdArgs = append(cmdArgs, "-c", "model_reasoning_effort="+effort[0])
 	}
 	if len(schema) > 0 {
 		schemaPath := filepath.Join(tmpDir, "team-decision-schema.json")
@@ -135,6 +143,7 @@ func (r *Runner) runCodexTeamTurn(ctx context.Context, tmpDir, outFile, cwd, mod
 		}
 	}
 	waitErr := cmd.Wait()
+	writeCodexUsage(filepath.Join(tmpDir, "usage.json"), stdout.String())
 	// A scan error (a line over the 4MB cap, or the pipe itself erroring)
 	// stops the loop the same way a clean EOF does — Scan() just returns
 	// false either way — so without this check a truncated/corrupted
