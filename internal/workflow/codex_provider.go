@@ -142,6 +142,10 @@ func (r *Runner) runCodexTeamTurn(ctx context.Context, tmpDir, outFile, cwd, mod
 			}
 		}
 	}
+	if scanner.Err() != nil {
+		// Stop a producer that may still be writing after the scanner limit.
+		_ = stdoutPipe.Close()
+	}
 	waitErr := cmd.Wait()
 	writeCodexUsage(filepath.Join(tmpDir, "usage.json"), stdout.String())
 	// A scan error (a line over the 4MB cap, or the pipe itself erroring)
