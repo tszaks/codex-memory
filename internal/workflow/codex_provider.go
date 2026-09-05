@@ -50,7 +50,7 @@ func (r *Runner) runCodexCommand(ctx context.Context, tmpDir, outFile, cwd, prom
 	runErr := cmd.Run()
 	writeCodexUsage(filepath.Join(tmpDir, "usage.json"), stdout.String())
 	if err := runErr; err != nil {
-		baseErr := formatProviderFailure("codex agent", err, stderr.String())
+		baseErr := formatProviderFailure("codex agent", err, truncateForError(strings.TrimSpace(stderr.String())))
 		return "", wrapProviderCommandError(baseErr, stdout.String()+stderr.String())
 	}
 	raw, err := os.ReadFile(outFile)
@@ -154,7 +154,7 @@ func (r *Runner) runCodexTeamTurn(ctx context.Context, tmpDir, outFile, cwd, mod
 		return "", wrapProviderCommandError(baseErr, stdout.String()+stderr.String())
 	}
 	if waitErr != nil {
-		baseErr := formatProviderFailure("team turn (codex)", waitErr, stderr.String())
+		baseErr := formatProviderFailure("team turn (codex)", waitErr, truncateForError(strings.TrimSpace(stderr.String())))
 		return "", wrapProviderCommandError(baseErr, stdout.String()+stderr.String())
 	}
 	raw, err := os.ReadFile(outFile)

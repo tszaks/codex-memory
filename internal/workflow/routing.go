@@ -15,7 +15,7 @@ func (r *Runner) resolveRouting(opts AgentOptions, mode string) (AgentOptions, s
 	c, err := routing.Load(path)
 	if os.IsNotExist(err) && os.Getenv("PALLIUM_ROUTING_CONFIG") == "" {
 		if opts.Model == "auto" {
-			return opts, "", fmt.Errorf("model auto requires a routing config; run pallium route init")
+			return opts, "", fmt.Errorf("model auto requires a routing config; run pallium route models init")
 		}
 		return opts, "", nil
 	}

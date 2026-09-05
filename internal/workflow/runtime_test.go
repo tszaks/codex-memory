@@ -3772,6 +3772,108 @@ func TestAgentTimeoutOptionFailsDirectCall(t *testing.T) {
 	}
 }
 
+// TestAgentOnErrorNullReturnsNullAndContinuesScript proves the Ultracode-
+// parity opt-in: a direct agent() call with on_error: "null" must not abort
+// the script when the agent fails. Instead it returns null for that call
+// (matching parallel()/pipeline()'s own null-on-failure behavior), records
+// the drop in the run's failures list, and lets the rest of the script keep
+// running.
+func TestAgentOnErrorNullReturnsNullAndContinuesScript(t *testing.T) {
+	t.Setenv("PALLIUM_WORKFLOW_PROVIDER_TEST_COMMAND", `PALLIUM_WORKFLOW_PROMPT="$(cat "$PALLIUM_WORKFLOW_PROMPT_FILE")"; if printf '%s' "$PALLIUM_WORKFLOW_PROMPT" | grep -q bad; then echo "boom" >&2; exit 1; fi; printf '{"prompt":"%s"}' "$PALLIUM_WORKFLOW_PROMPT" > "$PALLIUM_WORKFLOW_OUTPUT_FILE"`)
+	tmp := t.TempDir()
+	store, err := Open(filepath.Join(tmp, "sessions.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	script := `const failed = await agent("this is bad", { label: "first", provider: "test", on_error: "null" });
+const ok = await agent("this is fine", { label: "second", provider: "test" });
+return { failed, ok };`
+	scriptPath, err := WriteRunScript("wf-agent-onerror-null", tmp, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.CreateRun(Run{ID: "wf-agent-onerror-null", Task: "on_error null", CWD: tmp, ScriptPath: scriptPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&Runner{Store: store, Run: run, MaxAgents: 10}).Execute(context.Background(), script, nil)
+	if err != nil {
+		t.Fatalf("on_error: \"null\" must not abort the script when the agent fails, got %v", err)
+	}
+	if !strings.Contains(result, `"failed": null`) {
+		t.Fatalf("expected the failed call to resolve to null, got %s", result)
+	}
+	if !strings.Contains(result, "this is fine") {
+		t.Fatalf("expected the script to keep running after the failed call, got %s", result)
+	}
+	snapshot, err := store.Snapshot(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Run.Status != "completed" {
+		t.Fatalf("expected the run to complete despite the dropped agent, got %+v", snapshot.Run)
+	}
+	if len(snapshot.Run.Failures) != 1 || !strings.Contains(snapshot.Run.Failures[0].Error, "boom") {
+		t.Fatalf("expected the drop to be recorded in the run's failures list, got %+v", snapshot.Run.Failures)
+	}
+	if len(snapshot.Agents) != 2 || snapshot.Agents[0].Status != "failed" || snapshot.Agents[1].Status != "completed" {
+		t.Fatalf("expected one failed and one completed agent record, got %+v", snapshot.Agents)
+	}
+}
+
+// TestAgentOnErrorNullStillThrowsOnFatalError proves on_error: "null" is not
+// a blanket try/catch: a run-fatal cause (here, exceeding --max-agents)
+// still aborts the run exactly like the default "throw" behavior, since
+// that failure ends the whole run, not just this one call.
+func TestAgentOnErrorNullStillThrowsOnFatalError(t *testing.T) {
+	t.Setenv("PALLIUM_WORKFLOW_AGENT_STUB", `{"ok":true}`)
+	tmp := t.TempDir()
+	store, err := Open(filepath.Join(tmp, "sessions.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	script := `await agent("warmup");
+return await agent("hi", { on_error: "null" });`
+	scriptPath, err := WriteRunScript("wf-agent-onerror-fatal", tmp, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.CreateRun(Run{ID: "wf-agent-onerror-fatal", Task: "on_error fatal", CWD: tmp, ScriptPath: scriptPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = (&Runner{Store: store, Run: run, MaxAgents: 1}).Execute(context.Background(), script, nil)
+	if err == nil || !strings.Contains(err.Error(), "exceeded max agents") {
+		t.Fatalf("expected on_error: \"null\" to still surface a run-fatal error, got %v", err)
+	}
+}
+
+// TestAgentOnErrorRejectsInvalidValue proves a typo in on_error fails fast
+// with a clear message rather than silently falling back to either mode.
+func TestAgentOnErrorRejectsInvalidValue(t *testing.T) {
+	tmp := t.TempDir()
+	store, err := Open(filepath.Join(tmp, "sessions.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	script := `return await agent("hi", { on_error: "ignore" });`
+	scriptPath, err := WriteRunScript("wf-agent-onerror-invalid", tmp, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.CreateRun(Run{ID: "wf-agent-onerror-invalid", Task: "on_error invalid", CWD: tmp, ScriptPath: scriptPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = (&Runner{Store: store, Run: run, MaxAgents: 10}).Execute(context.Background(), script, nil)
+	if err == nil || !strings.Contains(err.Error(), `invalid agent on_error "ignore"`) {
+		t.Fatalf("expected invalid on_error to be rejected, got %v", err)
+	}
+}
+
 func TestWorkflowEditTimeoutPreservesRecoveryWithoutApplying(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
@@ -5741,4 +5843,71 @@ func TestAgentNetworkDefaultOff(t *testing.T) {
 	if strings.Contains(logs, "running with network access enabled") {
 		t.Fatalf("did not expect network-enabled log for a non-opted agent, got stderr: %s", logs)
 	}
+}
+
+// TestAgentStateTransitionsBumpRunUpdatedAt guards against a stale "Updated:"
+// header on `workflow inspect` while a run is very much alive: an agent
+// starting or finishing is proof the run made progress, so the run's own
+// updated_at must move past whatever it was at run creation — not stay
+// pinned there until the run's status itself flips (which is all
+// SetRunStatus ever touches).
+func TestAgentStateTransitionsBumpRunUpdatedAt(t *testing.T) {
+	tmp := t.TempDir()
+	store, err := Open(filepath.Join(tmp, "sessions.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	run, err := store.CreateRun(Run{Task: "bump test", CWD: tmp, ScriptPath: filepath.Join(tmp, "workflow.js"), Status: "running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedAt := run.UpdatedAt
+
+	time.Sleep(2 * time.Millisecond)
+	agent, err := store.CreateAgent(Agent{RunID: run.ID, Prompt: "p", Status: "running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterCreate, err := store.Run(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !startedAtTime(t, afterCreate.UpdatedAt).After(startedAtTime(t, startedAt)) {
+		t.Fatalf("expected run.updated_at to advance after CreateAgent, started at %q, got %q", startedAt, afterCreate.UpdatedAt)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	// Flip the run's own status away from "running" first — FinishAgentStatus's
+	// updated_at bump must still fire even though the heartbeat write next to
+	// it is gated on status='running' and would no-op here.
+	if err := store.SetRunStatus(run.ID, "failed", "", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	afterStatusFlip, err := store.Run(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	if err := store.FinishAgentStatus(agent, "failed", "", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	afterFinish, err := store.Run(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !startedAtTime(t, afterFinish.UpdatedAt).After(startedAtTime(t, afterStatusFlip.UpdatedAt)) {
+		t.Fatalf("expected run.updated_at to advance after FinishAgentStatus even on a non-running run, before %q, after %q", afterStatusFlip.UpdatedAt, afterFinish.UpdatedAt)
+	}
+}
+
+func startedAtTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t.Fatalf("parse timestamp %q: %v", s, err)
+	}
+	return parsed
 }

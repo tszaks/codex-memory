@@ -6,23 +6,25 @@
 
 **A local-first control plane for coding agents.**
 
-Pallium keeps orchestration, state, and verification outside an agent's context
-window, so an agent can run large, multi-step, parallel work that survives a
-crash, a restart, or the end of the chat.
+Most people should not need to become expert agent managers to get expert-level
+work from capable agents. Pallium translates a user's intent into the right
+context, memory, execution shape, and verification while keeping authority with
+the user. Durable orchestration and state live outside the context window, so
+the work can survive a crash, restart, or end of chat.
 
 One kernel, six services. Any model powers the work. Any agent drives it.
 
 ```bash
 npm i -g pallium
-pallium start "review my workflow changes and fix what's broken"
+pallium route "review my workflow changes and fix what's broken" --authority edit --execute --json
 ```
 
 ## The problem it solves
 
-A coding agent in a chat session is powerful but fragile. It forgets prior
-sessions. It cannot safely run ten workers in parallel against one repo. If the
-session dies mid-task, the work dies with it. And its orchestration is welded to
-whichever model you happened to open.
+A coding agent in a chat session is powerful but underused and fragile. Users
+must often know which tools to name, how to structure the work, and when to
+verify it. The agent forgets prior sessions, cannot safely run ten workers in
+parallel against one repo, and loses unfinished work when the session dies.
 
 Pallium moves the durable parts out of the model:
 
@@ -41,11 +43,25 @@ Pallium moves the durable parts out of the model:
 Pallium is one binary and one local database. The services share that kernel and
 compose through public interfaces.
 
-### `pallium start "<task>"`, the golden path
+### `pallium route "<task>"`, agent-driven service choice
+
+Give Pallium the task and the authority ceiling the user or environment already
+granted. It inspects repository state, selects a named capability, explains why
+it fits better than alternatives, and returns structured command arguments.
+`--execute` runs that recommendation without a shell and returns its result. It
+never widens authority or runs a blocked recommendation.
+
+```bash
+pallium route "find all running agent sessions" --authority observe --execute --json
+pallium route "fix the checkout race and verify it" --authority edit --execute --json
+pallium route capabilities --json
+```
+
+### `pallium start "<task>"`, the workflow golden path
 
 Describe a task in plain language. Pallium scopes the repo, picks or generates a
-plan, runs it, and reports back. Start here when you are not sure which service
-you need.
+plan, runs it, and reports back. Use it directly when you already know a
+repo-scoped workflow is the right service, or follow a route that selects it.
 
 ### Workflows: deterministic multi-agent orchestration
 
@@ -103,12 +119,73 @@ pallium handoff origin/main --json
 
 ### Session awareness and decisions
 
-Recall prior agent sessions across tools, and record the decisions behind the
-work so the reasoning outlives any one context.
+Recall where prior Codex and Claude work stopped, what was completed, what is
+still open, and the evidence behind the answer. Session memory stays local in
+SQLite. Search results are compact and cite the source session and transcript
+line instead of returning entire conversations.
 
 ```bash
-pallium sessions live --json
+pallium sessions sync
+pallium sessions embedding status
+pallium sessions embedding configure --provider openai --model text-embedding-3-small --credential-store keychain
+pallium sessions embedding check
+pallium sessions recall "where did the checkout migration stop?" --repo .
+pallium sessions search "production smoke test" --hybrid --source codex
+pallium sessions show <session-id>
+pallium sessions read <session-id> --from-line 120 --limit 50
+pallium sessions live --running-only --details
+pallium sessions find "Which sessions finished a few minutes ago?" --details
+pallium sessions find "Which sessions were updated most recently?" --limit 10
 pallium decisions "why did we choose worktrees" --json
+```
+
+`sessions sync` indexes changed transcripts, creates bounded continuity
+capsules, and catches up embeddings when a provider is configured. It
+automatically performs a full upgrade pass when it detects legacy noisy titles,
+metadata-only large sessions, or missing capsules. Raw provider events are not
+stored unless `--raw-events` is explicitly supplied.
+
+`sessions embedding configure` saves the provider, OpenAI-compatible base URL,
+model, and optional credential-store selection in `~/.pallium/embedding.json`
+with mode `0600`. On macOS, `--credential-store keychain` reads the provider key
+from the login Keychain service `app.pallium.embedding`; the secret never enters
+Pallium's JSON configuration, database, logs, or command line.
+`PALLIUM_EMBED_API_KEY` remains an explicit per-process override. Use `sessions
+embedding check` to verify the active vector space before a large embed.
+
+`sessions recall` uses BM25 plus current embeddings when available. If semantic
+retrieval is unavailable or times out, it returns lexical evidence and says so.
+Filter recall and search with `--repo`, `--cwd`, `--source`, `--file`, `--since`,
+or `--before`.
+
+Semantic retrieval stores one bounded continuity vector per session, built from
+the capsule, repository metadata, touched files, commands, and first/last
+conversation evidence. Exact search still covers the full indexed transcript.
+
+`sessions live` discovers local Codex CLI/Desktop and Claude Code sessions. JSON
+output includes its best-effort coverage and explicit exclusions, so callers do
+not mistake it for a generic inventory of shells, SSH/tmux, browsers, or unknown
+agent providers. Transcript lifecycle and pending calls distinguish `active`,
+`waiting`, `blocked`, `finished`, and `idle`. `stuck` requires both prolonged
+silence and stopped or uninterruptible process evidence; silence alone is idle.
+
+`sessions find` reasons over session metadata instead of transcript keywords.
+It understands completion, unfinished work, last-activity age, and recency
+phrases, then returns the exact interpretation and filters it applied. Use
+explicit flags such as `--completion not_finished`, `--inactive-for 3h`,
+`--finished-within 10m`, and `--sort updated` when deterministic automation is
+more important than natural phrasing. Unknown completion evidence remains
+unknown; Pallium does not silently treat it as unfinished.
+
+Maintenance is explicit and safe by default:
+
+```bash
+pallium sessions doctor
+pallium sessions doctor --repair --prune-raw-events --vacuum
+pallium sessions forget <session-id>          # preview
+pallium sessions forget <session-id> --confirm
+pallium sessions prune --older-than 180d      # preview
+pallium sessions prune --older-than 180d --confirm
 ```
 
 ## A worked example

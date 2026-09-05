@@ -12,10 +12,10 @@ func TestRouteInitPreservesExistingPolicy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "routing.json")
 	var out bytes.Buffer
 	app := NewApp(&out, &out)
-	if err := app.Run([]string{"route", "init", "--config", path, "--json"}); err != nil {
+	if err := app.Run([]string{"route", "models", "init", "--config", path, "--json"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Run([]string{"route", "init", "--config", path}); err == nil {
+	if err := app.Run([]string{"route", "models", "init", "--config", path}); err == nil {
 		t.Fatal("overwrote policy")
 	}
 	c, err := routing.Load(path)
@@ -23,7 +23,7 @@ func TestRouteInitPreservesExistingPolicy(t *testing.T) {
 		t.Fatalf("%+v %v", c, err)
 	}
 	out.Reset()
-	if err := app.Run([]string{"route", "catalog", "--config", path, "--json"}); err != nil {
+	if err := app.Run([]string{"route", "models", "catalog", "--config", path, "--json"}); err != nil {
 		t.Fatal(err)
 	}
 	var decoded routing.Config
@@ -39,10 +39,10 @@ func TestRouteRejectsDisallowedLabWithoutLaunching(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "routing.json")
 	var out bytes.Buffer
 	app := NewApp(&out, &out)
-	if err := app.Run([]string{"route", "init", "--config", path}); err != nil {
+	if err := app.Run([]string{"route", "models", "init", "--config", path}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Run([]string{"route", "explain", "--config", path, "--provider", "claude"}); err == nil {
+	if err := app.Run([]string{"route", "models", "explain", "--config", path, "--provider", "claude"}); err == nil {
 		t.Fatal("crossed lab policy")
 	}
 }
