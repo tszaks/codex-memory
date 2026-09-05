@@ -1,6 +1,6 @@
 # Model + effort evaluation protocol
 
-Status: design only. No model trials have run. Task specifications are source-grounded proposals; runnable fixtures and private graders remain to be materialized. This experiment tests Pallium work first, not all of Tyler's applications.
+Status: the executable harness is implemented; adapter smoke inference has run, but no accepted comparative benchmark establishes quality or savings. Task specifications can be materialized; independent reference validation and private grading remain prerequisites for promotion. This experiment tests Pallium work first, not all of Tyler's applications.
 
 ## Question and unit of comparison
 
@@ -34,7 +34,7 @@ Related provider, effort, accounting, and session-recovery tasks are grouped int
 ## Trial stages and budget
 
 1. Validate explicit effort transport and usage capture without paid inference using adapter tests. Confirm account/model access with the eventual trial preflight.
-2. Materialize fixtures and validate reference solutions. This research does not include an executable harness.
+2. Materialize fixtures and validate reference solutions. Use `eval/routing/run.py prepare`; preparation alone does not validate a reference solution.
 3. Calibration pilot: 12 tasks × 6 candidates × 1 run = 72 attempts, randomized candidate order with identical initial context. No adaptive retry in the first comparison; internal tool iterations count as part of the attempt. Predeclare equal task timeouts and token/tool ceilings.
 4. Freeze a simple routing policy using calibration outcomes. Compare always-Astra-high, always-Astra-low, the best calibration-selected fixed candidate, and the routing policy. No hindsight per-task selection on holdout.
 5. Holdout: 12 tasks × 6 candidates × 3 repetitions = 216 attempts for paired outcome estimates. Reuse a fixed prompt/environment; vary run IDs and randomize order. A later escalation-policy trial must actually execute and account for the handoff; it cannot be synthesized from isolated successful runs alone.
@@ -83,3 +83,7 @@ The 24-task pilot is too small to establish broad non-inferiority or make Auto t
 - Fixture/reference checks pass and the holdout split is frozen without related-defect leakage.
 - The trial budget, caps, billing basis, and permitted provider set are recorded.
 - Results are written as observations, with unknowns and failures retained.
+
+## Current harness limits
+
+The harness records binary and harness hashes, rejects mixed configurations in comparisons, excludes simulations, and requires explicit grading evidence. Research fixtures currently use the catalog as a source packet, so they measure packet comprehension, not unaided research. Worker instructions prohibit sibling/history access, but this is not OS-enforced holdout isolation. Independent reference validation, private grading environments, CLI/service-tier attestation, and the larger promotion study are not supplied by fixture preparation. Do not interpret a shadow-policy proposal as authorization or statistical proof for global Auto.

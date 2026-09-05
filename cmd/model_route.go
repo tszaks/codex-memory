@@ -36,7 +36,7 @@ func runModelRoute(out io.Writer, args []string, jsonOutput bool) error {
 	switch args[0] {
 	case "history":
 		if *runID == "" {
-			return fmt.Errorf("route history requires --run")
+			return fmt.Errorf("route models history requires --run")
 		}
 		store, err := workflow.Open(*db)
 		if err != nil {

@@ -1,38 +1,42 @@
-# Model and reasoning routing: research and evaluation
+# Model and reasoning routing
 
-Research date: September 4, 2026 (America/New_York). Local model-cache timestamp: September 5, 2026 UTC. Source checkout: `b9866188e97d0e6a5f6b91b307e0a8663cab92f4`.
+Pallium selects provider, model, and reasoning effort together. The steering agent supplies a task class; a versioned policy selects an eligible configuration without another model call. Explicit model or effort pins win. Provider restrictions, worker permissions, and availability constrain selection.
 
-## Decision
+## Use
 
-Proceed with a bounded experiment. Auto should select **provider, model, and reasoning effort together**, constrained by installed/authenticated providers, supported settings, user policy, task requirements, and budget. Explicit user selections win. Auto is an eventual default, not enabled by this research.
+```sh
+pallium route models init
+pallium route models catalog
+pallium route models explain --task-class bounded-edit
+pallium route models history --run RUN_ID
+```
 
-Deliverables:
+The policy lives at `.pallium/routing.json`, overridden by `PALLIUM_ROUTING_CONFIG`. Initialization creates a shadow policy and never overwrites an existing file. Shadow records a recommendation while preserving execution. Set `mode` to `auto` to apply recommendations, or `off` to disable selection. Add rules such as `"rules": {"bounded-edit": "luna-xhigh"}` after validating that configuration for your workload. The conservative default is `astra-high`; the starter has no task-family winner claims.
 
-- [Evidence catalog](catalog.md): primary sources, prices, capabilities, conflicts, and provisional candidates.
-- [Evaluation protocol](evaluation.md): configurations, scoring, accounting, isolation, and promotion criteria.
-- [Task specifications](tasks.jsonl): 24 source-grounded task designs, each with an acceptance contract. These are specifications, not executable fixtures or measured results.
+```js
+return await agent("Implement the bounded change", {
+  task_class: "bounded-edit",
+  mode: "edit"
+});
+// An explicit pair bypasses automatic selection:
+// { model: "gpt-5.6-luna", reasoning_effort: "xhigh" }
+```
 
-## What the checkout supports
+Effort is supported by agents, checks, gates, and team members, validated for the provider, transported to Codex/Claude, and persisted. Team CLI spawning accepts `--reasoning-effort`. Effort participates in cache identity; policy changes invalidate agent-gate approval. Native team sessions keep their selected configuration and recheck provider policy on dispatch.
 
-`internal/workflow/provider.go` resolves a provider and dispatches Codex, built-in Claude, or a configured wrapper. `AgentOptions.Model` in `internal/workflow/runtime.go` and the two built-in provider adapters support model overrides. `providers/gemini.sh` offers a Gemini wrapper. The generic wrapper contract supplies `PALLIUM_WORKFLOW_MODEL`.
+Optional `escalations` maps task classes to candidate-ID lists (at most three). `untilGreen` advances the fix configuration only after verification failures, subject to its existing round and budget limits. Explicit pins still win. Missing providers do not authorize crossing the allowed-provider boundary.
 
-There is **no explicit reasoning-effort field in AgentOptions, CheckOptions, or GateOptions**. No reasoning-effort reference was found in `internal/workflow` or `cmd`. Inherited CLI configuration is not a reproducible per-task choice. Adding, validating, forwarding, and persisting effort is a prerequisite to controlled trials, not implemented here.
+## Observability and evidence
 
-Codex CLI 0.153.0 and Claude Code 2.1.223 are installed. `gemini` was not on PATH. The local Codex model cache advertises the four initial OpenAI candidates and supported effort levels; this is discovery evidence, not a successful worker invocation or proof of account billing terms. No authentication files were read and no paid worker was launched.
+Workflow inspection and model-route history expose per-invocation configuration, duration, status, and usage. Codex completed-turn events provide token counts; token counts alone do not establish dollar charges. Unknown cost stays null, and retry costs include failed attempts. Configuration records describe settings sent to the provider, not an independently verified server-side model identity.
 
-The built-in ordinary Codex worker writes final output but does not write the usage file consumed by the common runtime. Cost estimates already stored by Pallium must not be mistaken for metered cost. Accurate token/usage capture is another trial prerequisite.
+The implementation has adapter, policy, persistence, and integration tests. A live Auto smoke selected Luna xhigh and returned the expected response. That proves dispatch wiring, not task quality or savings. A larger source-reading trial timed out; it is not evidence that a cheaper configuration is superior. Auto remains opt-in until workload evidence supports a default change.
 
-## Lab boundaries
+- [Evidence catalog](catalog.md): dated primary-source research and provisional candidates.
+- [Evaluation protocol](evaluation.md): scoring, accounting, isolation, and promotion criteria.
+- [Evaluation harness](../../eval/routing/README.md): fixture preparation, bounded execution, grading, reports, and shadow-policy proposals.
+- [Task specifications](tasks.jsonl): 24 historical-source specifications, split 12/12 by related task groups. Runtime preparation materializes and hashes fixtures; the checked-in specifications are not measured results.
 
-Separate three things: a model's origin, a host's built-in delegation options, and providers reachable through Pallium. A restricted host may offer only same-lab delegation. Pallium can dispatch a different provider through its external CLI when tools, authentication, and policy permit. Code support is not proof that a particular account can execute that model.
+## Provider boundaries
 
-The first experiment is OpenAI-only to match the requested Astra/Luna comparison and reduce harness differences. Claude and Gemini remain cataloged expansion candidates. A future allowed-provider list must be explicit; missing access never triggers a silent cross-provider fallback. Provider-native session IDs are not transferable. New-provider workers need a bounded context handoff, and its cost belongs in the comparison.
-
-## Next implementation slice
-
-1. Add explicit effort support across worker/check/gate/team options, provider adapters, persisted execution records, and replay/cache identities. Validate provider-specific values; unsupported values fail clearly.
-2. Capture requested and effective provider/model/effort, usage, service tier, CLI version, and all retry costs. Keep unknown costs null.
-3. Materialize the task fixtures and private graders described in the protocol, then freeze hashes and the calibration/holdout split.
-4. Run a budgeted pilot only after its execution budget is set. Research collection is complete for this first catalog; model trials and implementation have not started.
-
-This is a research-backed shortlist, not an exhaustive model ranking. No evidence here establishes that Luna xhigh is superior to Astra high on Pallium tasks.
+A host's native delegation choices may be limited to one lab. Pallium can invoke another installed and authenticated provider CLI when explicit policy permits. Installation alone does not prove authentication. Provider-native sessions are not portable across labs. The starter and evaluation runner use Codex for the initial Astra/Luna comparison; the runtime also supports Claude and configured wrappers. Unsupported reasoning settings fail explicitly.

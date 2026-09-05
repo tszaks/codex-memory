@@ -148,5 +148,6 @@ the recommendation directly without a shell, but never widens that ceiling.
 
 Usage:
   pallium route <task> [--cwd path] [--authority observe|execute|edit|external] [--execute] [--json]
-  pallium route capabilities [--json]`)
+  pallium route capabilities [--json]
+  pallium route models <init|explain|catalog|history> [options]`)
 }
